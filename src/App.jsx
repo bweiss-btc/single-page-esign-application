@@ -16,6 +16,9 @@ function normalizeAgent(d){if(!d)return null;const n=d.Name||d.name;if(!n)return
 function getInitials(name){return name.split(" ").map(w=>w[0]).join("").toUpperCase().slice(0,2);}
 function BIcon({size=84}){return(<svg width={size} height={size} viewBox="0 0 60 60" fill="none" xmlns="http://www.w3.org/2000/svg"><rect width="60" height="60" fill="#1f4e5f"/><path d="M20 12C20 12 20 38 20 42C20 50 26 54 33 54C40 54 46 49 46 42C46 35 40 31 34 31C30 31 27 32 25 34V12H20Z" fill="white"/><circle cx="33" cy="42" r="8" fill="white"/><path d="M25 34V42C25 46.4 28.6 50 33 50C37.4 50 41 46.4 41 42C41 37.6 37.4 34 33 34C30.2 34 27.6 35.4 26 37.5" fill="#1f4e5f"/></svg>);}
 
+// Helper: get value from data with flexible key matching
+function getVal(data, ...keys){for(const k of keys){const v=data[k];if(v!==undefined&&v!==null&&String(v).trim()!=="")return String(v);}return "";}
+
 function Field({label,value,onChange,type="text",placeholder="",required,half}){const[f,setF]=useState(false);return(<div style={{flex:half?"1 1 calc(50% - 10px)":"1 1 100%",minWidth:half?140:0}}><label style={{display:"block",marginBottom:5,fontSize:12.5,fontWeight:600,color:f?NV3:"#4a5568",fontFamily:"'Plus Jakarta Sans',sans-serif"}}>{label}{required&&<span style={{color:"#d64545",marginLeft:2}}>*</span>}</label><input type={type} value={value} placeholder={placeholder} onChange={e=>onChange(e.target.value)} onFocus={()=>setF(true)} onBlur={()=>setF(false)} style={{width:"100%",padding:"10px 14px",border:`1.5px solid ${f?NV3:"#dde1e7"}`,borderRadius:10,fontSize:14,fontFamily:"'Plus Jakarta Sans',sans-serif",color:"#1a202c",background:f?"#f0f4f8":"#fff",outline:"none",boxSizing:"border-box"}} /></div>);}
 function Select({label,value,onChange,options,required,half,placeholder="Select..."}){const[f,setF]=useState(false);return(<div style={{flex:half?"1 1 calc(50% - 10px)":"1 1 100%",minWidth:half?140:0}}><label style={{display:"block",marginBottom:5,fontSize:12.5,fontWeight:600,color:f?NV3:"#4a5568",fontFamily:"'Plus Jakarta Sans',sans-serif"}}>{label}{required&&<span style={{color:"#d64545",marginLeft:2}}>*</span>}</label><select value={value} onChange={e=>onChange(e.target.value)} onFocus={()=>setF(true)} onBlur={()=>setF(false)} style={{width:"100%",padding:"10px 14px",border:`1.5px solid ${f?NV3:"#dde1e7"}`,borderRadius:10,fontSize:14,fontFamily:"'Plus Jakarta Sans',sans-serif",color:value?"#1a202c":"#a0aec0",background:f?"#f0f4f8":"#fff",outline:"none",appearance:"none",cursor:"pointer",boxSizing:"border-box"}}><option value="">{placeholder}</option>{options.map(o=><option key={o} value={o}>{o}</option>)}</select></div>);}
 function Textarea({label,value,onChange,placeholder,required}){const[f,setF]=useState(false);return(<div style={{flex:"1 1 100%"}}><label style={{display:"block",marginBottom:5,fontSize:12.5,fontWeight:600,color:f?NV3:"#4a5568",fontFamily:"'Plus Jakarta Sans',sans-serif"}}>{label}{required&&<span style={{color:"#d64545",marginLeft:2}}>*</span>}</label><textarea value={value} placeholder={placeholder} rows={3} onChange={e=>onChange(e.target.value)} onFocus={()=>setF(true)} onBlur={()=>setF(false)} style={{width:"100%",padding:"10px 14px",border:`1.5px solid ${f?NV3:"#dde1e7"}`,borderRadius:10,fontSize:14,fontFamily:"'Plus Jakarta Sans',sans-serif",color:"#1a202c",background:f?"#f0f4f8":"#fff",outline:"none",resize:"vertical",boxSizing:"border-box"}} /></div>);}
@@ -25,21 +28,9 @@ function SH({title,subtitle}){return(<div style={{background:`linear-gradient(13
 function TopBar(){return(<div style={{background:"#fff",borderBottom:"1px solid #e2e8f0",padding:"14px 28px",display:"flex",alignItems:"center",boxShadow:"0 1px 3px rgba(0,0,0,0.04)"}}><img src={LOGO} alt="Big Think Capital" style={{height:40,objectFit:"contain"}} /><div style={{marginLeft:"auto",fontSize:11.5,color:"#94a3b8",fontWeight:500}}>Business Financing Application</div></div>);}
 
 function AgentCard({agent,collapsed,onToggle}){
-  if(!agent)return null;
-  const ini=getInitials(agent.Name);
+  if(!agent)return null;const ini=getInitials(agent.Name);
   if(collapsed)return(<div onClick={onToggle} style={{position:"fixed",right:0,top:"50%",transform:"translateY(-50%)",zIndex:100,background:`linear-gradient(180deg,${NV1},${NV2})`,color:"#fff",padding:"14px 10px",borderRadius:"10px 0 0 10px",cursor:"pointer",writingMode:"vertical-rl",fontSize:11,fontWeight:700,letterSpacing:"0.05em",boxShadow:"-2px 0 12px rgba(0,0,0,0.3)"}}>{"\u203A"}  YOUR FUNDING EXPERT</div>);
-  return(<div style={{position:"fixed",right:20,top:"50%",transform:"translateY(-50%)",zIndex:100,width:300,background:"#fff",borderRadius:16,boxShadow:"0 10px 50px rgba(0,0,0,0.25)",overflow:"visible",fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
-    <div style={{background:`linear-gradient(160deg,${NV1},${NV2},${NV3})`,borderRadius:"16px 16px 0 0",padding:"12px 16px 60px",display:"flex",alignItems:"flex-start",gap:10}}>
-      <div onClick={onToggle} style={{width:28,height:28,borderRadius:8,background:"rgba(255,255,255,0.1)",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",color:"rgba(255,255,255,0.7)",fontSize:18,fontWeight:700,flexShrink:0,marginTop:2}}>{"\u203A"}</div>
-      <p style={{margin:0,fontSize:12,fontWeight:700,letterSpacing:"0.12em",color:"rgba(255,255,255,0.85)",textTransform:"uppercase",lineHeight:1.4,paddingTop:4}}>YOUR ASSIGNED FUNDING EXPERT</p>
-    </div>
-    <div style={{textAlign:"center",marginTop:-44,padding:"0 28px 28px"}}>
-      <div style={{width:84,height:84,borderRadius:"50%",border:"4px solid #fff",display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 16px",overflow:"hidden",boxShadow:"0 6px 20px rgba(0,0,0,0.25)"}}>{agent.Photo?<img src={agent.Photo} alt="" style={{width:"100%",height:"100%",objectFit:"cover"}} />:<BIcon size={84} />}</div>
-      <p style={{margin:"0 0 24px",fontSize:22,fontWeight:600,color:"#1a202c"}}>{agent.Name}</p>
-      {agent.Email&&<a href={"mailto:"+agent.Email} style={{display:"flex",alignItems:"center",justifyContent:"center",gap:10,padding:"13px 18px",background:"#f5f7f9",borderRadius:28,textDecoration:"none",color:NV2,fontSize:13,fontWeight:500,marginBottom:12,border:"1px solid #e4e9ed"}}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={NV2} strokeWidth="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M22 4l-10 8L2 4"/></svg>{agent.Email}</a>}
-      {agent.Phone&&<a href={"tel:"+agent.Phone} style={{display:"flex",alignItems:"center",justifyContent:"center",gap:10,padding:"13px 18px",background:"#f5f7f9",borderRadius:28,textDecoration:"none",color:NV2,fontSize:13,fontWeight:500,border:"1px solid #e4e9ed"}}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={NV2} strokeWidth="2"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.79 19.79 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z"/></svg>{agent.Phone}</a>}
-    </div>
-  </div>);
+  return(<div style={{position:"fixed",right:20,top:"50%",transform:"translateY(-50%)",zIndex:100,width:300,background:"#fff",borderRadius:16,boxShadow:"0 10px 50px rgba(0,0,0,0.25)",overflow:"visible",fontFamily:"'Plus Jakarta Sans',sans-serif"}}><div style={{background:`linear-gradient(160deg,${NV1},${NV2},${NV3})`,borderRadius:"16px 16px 0 0",padding:"12px 16px 60px",display:"flex",alignItems:"flex-start",gap:10}}><div onClick={onToggle} style={{width:28,height:28,borderRadius:8,background:"rgba(255,255,255,0.1)",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",color:"rgba(255,255,255,0.7)",fontSize:18,fontWeight:700,flexShrink:0,marginTop:2}}>{"\u203A"}</div><p style={{margin:0,fontSize:12,fontWeight:700,letterSpacing:"0.12em",color:"rgba(255,255,255,0.85)",textTransform:"uppercase",lineHeight:1.4,paddingTop:4}}>YOUR ASSIGNED FUNDING EXPERT</p></div><div style={{textAlign:"center",marginTop:-44,padding:"0 28px 28px"}}><div style={{width:84,height:84,borderRadius:"50%",border:"4px solid #fff",display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 16px",overflow:"hidden",boxShadow:"0 6px 20px rgba(0,0,0,0.25)"}}>{agent.Photo?<img src={agent.Photo} alt="" style={{width:"100%",height:"100%",objectFit:"cover"}} />:<BIcon size={84} />}</div><p style={{margin:"0 0 24px",fontSize:22,fontWeight:600,color:"#1a202c"}}>{agent.Name}</p>{agent.Email&&<a href={"mailto:"+agent.Email} style={{display:"flex",alignItems:"center",justifyContent:"center",gap:10,padding:"13px 18px",background:"#f5f7f9",borderRadius:28,textDecoration:"none",color:NV2,fontSize:13,fontWeight:500,marginBottom:12,border:"1px solid #e4e9ed"}}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={NV2} strokeWidth="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M22 4l-10 8L2 4"/></svg>{agent.Email}</a>}{agent.Phone&&<a href={"tel:"+agent.Phone} style={{display:"flex",alignItems:"center",justifyContent:"center",gap:10,padding:"13px 18px",background:"#f5f7f9",borderRadius:28,textDecoration:"none",color:NV2,fontSize:13,fontWeight:500,border:"1px solid #e4e9ed"}}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={NV2} strokeWidth="2"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.79 19.79 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z"/></svg>{agent.Phone}</a>}</div></div>);
 }
 
 function AgentFooter({agent}){if(!agent)return null;const ini=getInitials(agent.Name);return(<div style={{background:`linear-gradient(135deg,${NV1},${NV2},${NV3})`,padding:"14px 28px",display:"flex",alignItems:"center",justifyContent:"center",gap:18,flexWrap:"wrap"}}><span style={{fontSize:10,fontWeight:700,letterSpacing:"0.1em",color:"rgba(255,255,255,0.6)",textTransform:"uppercase"}}>YOUR ASSIGNED FUNDING EXPERT:</span><div style={{display:"flex",alignItems:"center",gap:10}}><div style={{width:30,height:30,borderRadius:"50%",overflow:"hidden",display:"flex",alignItems:"center",justifyContent:"center",background:NV1,color:"#fff",fontSize:11,fontWeight:700}}>{agent.Photo?<img src={agent.Photo} alt="" style={{width:"100%",height:"100%",objectFit:"cover"}} />:ini}</div><span style={{color:"#fff",fontSize:14,fontWeight:700}}>{agent.Name}</span></div>{agent.Email&&<><span style={{color:"rgba(255,255,255,0.2)"}}>|</span><a href={"mailto:"+agent.Email} style={{color:"rgba(255,255,255,0.9)",fontSize:12.5,textDecoration:"none"}}>{agent.Email}</a></>}{agent.Phone&&<><span style={{color:"rgba(255,255,255,0.2)"}}>|</span><a href={"tel:"+agent.Phone} style={{color:"rgba(255,255,255,0.9)",fontSize:12.5,textDecoration:"none"}}>{agent.Phone}</a></>}</div>);}
@@ -60,23 +51,53 @@ export default function App(){
   const initDocuSeal=useCallback(async()=>{setDocLoading(true);setDocError(null);try{const res=await fetch("/api/create-submission",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({business:biz,owners,email})});const data=await res.json();if(!res.ok)throw new Error(data.error||"Failed");window.location.href=data.signingUrl;}catch(err){setDocError(err.message);setDocLoading(false);}},[biz,owners,email]);
   useEffect(()=>{if(step===2&&!docLoading&&!docError){initDocuSeal();}},[step]);
 
+  // Lookup applicant by email (sends as query param)
   const handleEmailSubmit=async()=>{
     _email=email;
     sendWebhook({event:"email_entered",step:"email",email});
     setLoading(true);
     try{
-      const res=await fetch(LOOKUP_WEBHOOK,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email})});
+      const res=await fetch(LOOKUP_WEBHOOK+"?email="+encodeURIComponent(email));
       const d=await res.json();
       const data=Array.isArray(d)?d[0]:d;
-      if(data){
-        const bizMap={name:"businessName",dba:"dba",startDate:"businessStartDate",entity:"legalEntity",industry:"industry",taxId:"taxId",description:"businessDescription",amountRequested:"amountRequested",annualRevenue:"annualRevenue",useOfProceeds:"useOfProceeds",product:"productsInterestedIn",address:"businessAddress",city:"businessCity",state:"businessState",zip:"businessZip",website:"website",phone:"phone",ownRealEstate:"ownsRealEstate",openLoans:"hasOpenBusinessLoans"};
+      if(data&&data.found!=="false"&&data.notFound!==true){
+        // Map business fields - checks multiple possible key names from Salesforce
         const newBiz={...biz};
-        for(const[key,field]of Object.entries(bizMap)){const v=data[field]||data[field.charAt(0).toUpperCase()+field.slice(1)];if(v&&String(v).trim())newBiz[key]=String(v);}
+        newBiz.name=getVal(data,"Company","company","businessName","Business_Name")||newBiz.name;
+        newBiz.dba=getVal(data,"DBA_Name__c","dba","dbaName","DBA")||newBiz.dba;
+        newBiz.startDate=getVal(data,"Business_Start_Date__c","businessStartDate","startDate")||newBiz.startDate;
+        newBiz.entity=getVal(data,"Legal_Entity__c","legalEntity","entity")||newBiz.entity;
+        newBiz.industry=getVal(data,"Industry","industry")||newBiz.industry;
+        newBiz.taxId=getVal(data,"Federal_Tax_Id__c","taxId","federalTaxId")||newBiz.taxId;
+        newBiz.description=getVal(data,"Description","description","Business_Description__c","businessDescription")||newBiz.description;
+        newBiz.amountRequested=getVal(data,"Amount_Requested__c","amountRequested")||newBiz.amountRequested;
+        newBiz.annualRevenue=getVal(data,"Annual_Revenue__c","annualRevenue")||newBiz.annualRevenue;
+        newBiz.useOfProceeds=getVal(data,"Use_of_Proceeds__c","useOfProceeds")||newBiz.useOfProceeds;
+        newBiz.product=getVal(data,"Products_Interested_In__c","productsInterestedIn","product")||newBiz.product;
+        newBiz.address=getVal(data,"Street","Business_Address__c","businessAddress","address")||newBiz.address;
+        newBiz.city=getVal(data,"City","Business_City__c","businessCity")||newBiz.city;
+        newBiz.state=getVal(data,"State","Business_State__c","businessState")||newBiz.state;
+        newBiz.zip=getVal(data,"PostalCode","Business_Zip__c","businessZip","zip")||newBiz.zip;
+        newBiz.website=getVal(data,"Website","website")||newBiz.website;
+        newBiz.phone=getVal(data,"Phone","phone")||newBiz.phone;
+        newBiz.ownRealEstate=getVal(data,"Owns_Real_Estate__c","ownsRealEstate")||newBiz.ownRealEstate;
+        newBiz.openLoans=getVal(data,"Has_Open_Business_Loans__c","hasOpenBusinessLoans")||newBiz.openLoans;
         setBiz(newBiz);
-        const ownerMap={firstName:"ownerFirstName",lastName:"ownerLastName",dob:"ownerBirthday",ssn:"ownerSSN",ownership:"ownerPercentage",creditScore:"ownerCreditScore",address:"ownerAddress",city:"ownerCity",state:"ownerState",zip:"ownerZip",email:"ownerEmail",cell:"ownerPhone"};
+
+        // Map owner fields
         const newOwner={...owners[0]};
-        for(const[key,field]of Object.entries(ownerMap)){const v=data[field]||data[field.charAt(0).toUpperCase()+field.slice(1)];if(v&&String(v).trim())newOwner[key]=String(v);}
-        if(!newOwner.email&&email)newOwner.email=email;
+        newOwner.firstName=getVal(data,"FirstName","firstName","ownerFirstName","Owner_First_Name__c")||newOwner.firstName;
+        newOwner.lastName=getVal(data,"LastName","lastName","ownerLastName","Owner_Last_Name__c")||newOwner.lastName;
+        newOwner.dob=getVal(data,"Date_of_Birth__c","ownerBirthday","dob","dateOfBirth")||newOwner.dob;
+        newOwner.ssn=getVal(data,"SSN__c","ownerSSN","ssn")||newOwner.ssn;
+        newOwner.ownership=getVal(data,"Ownership_Percentage__c","ownerPercentage","ownership")||newOwner.ownership;
+        newOwner.creditScore=getVal(data,"Credit_Score__c","ownerCreditScore","creditScore")||newOwner.creditScore;
+        newOwner.address=getVal(data,"Owner_Address__c","ownerAddress")||newOwner.address;
+        newOwner.city=getVal(data,"Owner_City__c","ownerCity")||newOwner.city;
+        newOwner.state=getVal(data,"Owner_State__c","ownerState")||newOwner.state;
+        newOwner.zip=getVal(data,"Owner_Zip__c","ownerZip")||newOwner.zip;
+        newOwner.email=getVal(data,"Email","email","ownerEmail")||email;
+        newOwner.cell=getVal(data,"MobilePhone","ownerPhone","cell","mobilePhone")||newOwner.cell;
         setOwners([newOwner,...owners.slice(1)]);
       }
     }catch(e){console.log("Lookup error:",e);}
@@ -95,7 +116,6 @@ export default function App(){
   if(showEmail){
     const ini=agent?getInitials(agent.Name):"";
     return(<div style={{minHeight:"100vh",display:"flex",flexDirection:"column",background:`linear-gradient(170deg,${NV1} 0%,#0d2137 50%,${NV2} 100%)`,fontFamily:"'Plus Jakarta Sans',sans-serif"}}><link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" /><style>{`@keyframes spin{to{transform:rotate(360deg);}}`}</style>
-    {/* Lighter header bar */}
     <div style={{background:"rgba(255,255,255,0.15)",backdropFilter:"blur(12px)",borderBottom:"1px solid rgba(255,255,255,0.15)",padding:"16px 28px",display:"flex",alignItems:"center",justifyContent:"center"}}><img src={LOGO} alt="Big Think Capital" style={{height:40,objectFit:"contain"}} /></div>
     <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"32px 20px 20px"}}>
       <div style={{display:"inline-flex",alignItems:"center",gap:8,background:"rgba(255,255,255,0.06)",border:"1px solid rgba(255,255,255,0.12)",borderRadius:24,padding:"8px 20px",marginBottom:28}}><div style={{width:8,height:8,borderRadius:"50%",background:"#5b9bd5"}} /><span style={{fontSize:12,fontWeight:700,letterSpacing:"0.14em",color:"rgba(255,255,255,0.8)",textTransform:"uppercase"}}>Funding Application</span></div>
