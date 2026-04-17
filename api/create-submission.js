@@ -3,6 +3,7 @@ export default async function handler(req, res) {
 
   const { DOCUSEAL_BASE_ENDPOINT, DOCUSEAL_TEMPLATE_ID, DOCUSEAL_API_KEY } = process.env;
   const WEBHOOK_URL = "https://n8n.bigthinkcapital.com/webhook/ec9ccd01-c951-42b3-ac51-27a3077f6648";
+  const APP_URL = "https://single-page-esign-application.vercel.app";
 
   if (!DOCUSEAL_API_KEY) return res.status(500).json({ error: "DOCUSEAL_API_KEY is not set" });
   if (!DOCUSEAL_BASE_ENDPOINT) return res.status(500).json({ error: "DOCUSEAL_BASE_ENDPOINT is not set" });
@@ -29,70 +30,86 @@ export default async function handler(req, res) {
       console.error("Webhook error (non-blocking):", webhookErr.message);
     }
 
-    // 2. Build pre-fill fields matching DocuSeal template
+    // 2. Build ALL fields - use value if filled, "N/A" if not, all readonly
     const fields = [];
-    if (business) {
-      const map = {
-        "Business Name": business.name,
-        "DBA Name": business.dba,
-        "Business Start Date": business.startDate,
-        "Legal Entity": business.entity,
-        "Industry": business.industry,
-        "Tax Id": business.taxId,
-        "Business Description": business.description,
-        "Amount Requested": business.amountRequested,
-        "Annual Revenue": business.annualRevenue,
-        "Use of Proceeds": business.useOfProceeds,
-        "Products Interested In": business.product,
-        "Business Address": business.address,
-        "Business City": business.city,
-        "Business State": business.state,
-        "Business Zip": business.zip,
-        "Website": business.website,
-        "Phone": business.phone,
-        "Owns Real Estate": business.ownRealEstate,
-        "Has Open Business Loans": business.openLoans
-      };
-      for (const [name, value] of Object.entries(map)) {
-        if (value && String(value).trim() !== "") {
-          fields.push({ name, default_value: String(value), readonly: true });
-        }
-      }
+    const today = new Date().toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" });
+    const ownerEmail = email || owners?.[0]?.email || "";
+    const b = business || {};
+    const o = (owners && owners.length > 0) ? owners[0] : {};
+
+    // Business fields - exact DocuSeal template names
+    const bizFields = {
+      "Business Name": b.name,
+      "DBA Name": b.dba,
+      "Business Start Date": b.startDate,
+      "Legal Entity": b.entity,
+      "Industry": b.industry,
+      "Tax Id": b.taxId,
+      "Business Description": b.description,
+      "Amount Requested": b.amountRequested,
+      "Annual Revenue": b.annualRevenue,
+      "Use of Proceeds": b.useOfProceeds,
+      "Products Interested In": b.product,
+      "Business Address": b.address,
+      "Business City": b.city,
+      "Business State": b.state,
+      "Business Zip": b.zip,
+      "Website": b.website,
+      "Phone": b.phone,
+      "Owns Real Estate": b.ownRealEstate,
+      "Has Open Business Loans": b.openLoans
+    };
+
+    for (const [name, value] of Object.entries(bizFields)) {
+      fields.push({
+        name,
+        default_value: (value && String(value).trim() !== "") ? String(value) : " ",
+        readonly: true
+      });
     }
 
-    if (owners && owners.length > 0) {
-      const o = owners[0];
-      const ownerMap = {
-        "Owner First Name": o.firstName,
-        "Owner Last Name": o.lastName,
-        "Owner Birthday": o.dob,
-        "Owner SSN": o.ssn,
-        "Owner Percentage": o.ownership,
-        "Owner Address": o.address,
-        "Owner City": o.city,
-        "Owner State": o.state,
-        "Owner Zip": o.zip,
-        "Owner Credit Score": o.creditScore,
-        "Owner Email": o.email,
-        "Owner Phone": o.cell
-      };
-      for (const [name, value] of Object.entries(ownerMap)) {
-        if (value && String(value).trim() !== "") {
-          fields.push({ name, default_value: String(value), readonly: true });
-        }
-      }
+    // Owner fields
+    const ownerFields = {
+      "Owner First Name": o.firstName,
+      "Owner Last Name": o.lastName,
+      "Owner Birthday": o.dob,
+      "Owner SSN": o.ssn,
+      "Owner Percentage": o.ownership,
+      "Owner Address": o.address,
+      "Owner City": o.city,
+      "Owner State": o.state,
+      "Owner Zip": o.zip,
+      "Owner Credit Score": o.creditScore,
+      "Owner Email": ownerEmail,
+      "Owner Phone": o.cell
+    };
+
+    for (const [name, value] of Object.entries(ownerFields)) {
+      fields.push({
+        name,
+        default_value: (value && String(value).trim() !== "") ? String(value) : " ",
+        readonly: true
+      });
     }
 
-    const submitterEmail = email || owners?.[0]?.email || "applicant@example.com";
+    // Auto-fill signature date
+    fields.push({
+      name: "Owner Signature Date",
+      default_value: today,
+      readonly: true
+    });
 
-    // 3. Create DocuSeal submission
+    const submitterEmail = ownerEmail || "applicant@example.com";
+
+    // 3. Create DocuSeal submission with redirect back to app
     const payload = {
       template_id: parseInt(DOCUSEAL_TEMPLATE_ID),
       send_email: false,
+      completed_redirect_url: APP_URL + "/?signed=true",
       submitters: [{
         email: submitterEmail,
         role: "Owner 1",
-        fields: fields.length > 0 ? fields : undefined
+        fields
       }]
     };
 
@@ -132,7 +149,6 @@ export default async function handler(req, res) {
       return res.status(500).json({ error: "No slug returned from DocuSeal" });
     }
 
-    // Return signing URL for redirect
     return res.status(200).json({
       slug,
       signingUrl: DOCUSEAL_BASE_ENDPOINT + "/s/" + slug
