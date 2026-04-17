@@ -2,6 +2,7 @@ export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
   const { DOCUSEAL_BASE_ENDPOINT, DOCUSEAL_TEMPLATE_ID, DOCUSEAL_API_KEY } = process.env;
+  const WEBHOOK_URL = "https://n8n.bigthinkcapital.com/webhook/ec9ccd01-c951-42b3-ac51-27a3077f6648";
 
   if (!DOCUSEAL_API_KEY) return res.status(500).json({ error: "DOCUSEAL_API_KEY is not set" });
   if (!DOCUSEAL_BASE_ENDPOINT) return res.status(500).json({ error: "DOCUSEAL_BASE_ENDPOINT is not set" });
@@ -9,8 +10,27 @@ export default async function handler(req, res) {
 
   try {
     const { business, owners, email } = req.body;
-    const fields = [];
 
+    // 1. Send all form data to n8n webhook
+    try {
+      await fetch(WEBHOOK_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          event: "application_submitted",
+          timestamp: new Date().toISOString(),
+          email,
+          business,
+          owners
+        })
+      });
+      console.log("Webhook sent successfully");
+    } catch (webhookErr) {
+      console.error("Webhook error (non-blocking):", webhookErr.message);
+    }
+
+    // 2. Build pre-fill fields matching DocuSeal template
+    const fields = [];
     if (business) {
       const map = {
         "Business Name": business.name,
@@ -65,6 +85,7 @@ export default async function handler(req, res) {
 
     const submitterEmail = email || owners?.[0]?.email || "applicant@example.com";
 
+    // 3. Create DocuSeal submission
     const payload = {
       template_id: parseInt(DOCUSEAL_TEMPLATE_ID),
       send_email: false,
@@ -76,9 +97,7 @@ export default async function handler(req, res) {
     };
 
     console.log("DocuSeal request:", DOCUSEAL_BASE_ENDPOINT + "/api/submissions");
-    console.log("Template ID:", DOCUSEAL_TEMPLATE_ID);
     console.log("Fields count:", fields.length);
-    console.log("Field names:", fields.map(f => f.name).join(", "));
 
     const response = await fetch(DOCUSEAL_BASE_ENDPOINT + "/api/submissions", {
       method: "POST",
@@ -103,19 +122,20 @@ export default async function handler(req, res) {
     try {
       data = JSON.parse(responseText);
     } catch (e) {
-      return res.status(500).json({ error: "Invalid JSON from DocuSeal", details: responseText });
+      return res.status(500).json({ error: "Invalid JSON from DocuSeal" });
     }
 
     const submitter = Array.isArray(data) ? data[0] : data;
     const slug = submitter?.slug;
 
     if (!slug) {
-      return res.status(500).json({ error: "No slug returned from DocuSeal", details: responseText });
+      return res.status(500).json({ error: "No slug returned from DocuSeal" });
     }
 
+    // Return signing URL for redirect
     return res.status(200).json({
       slug,
-      src: DOCUSEAL_BASE_ENDPOINT + "/s/" + slug
+      signingUrl: DOCUSEAL_BASE_ENDPOINT + "/s/" + slug
     });
   } catch (error) {
     console.error("Submission error:", error);
