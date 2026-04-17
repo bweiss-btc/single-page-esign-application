@@ -13,7 +13,6 @@ function getParam(k){return new URLSearchParams(window.location.search).get(k);}
 let _agentData=null;let _email="";
 function normalizeAgent(d){if(!d)return null;const n=d.Name||d.name;if(!n)return null;return{Name:n,Email:d.Email||d.email||"",Phone:d.Phone||d.phone||"",Photo:d.User_Photo_URL__c||d.photo||d.Photo||""};}
 function getInitials(name){return name.split(" ").map(w=>w[0]).join("").toUpperCase().slice(0,2);}
-
 function BIcon({size=84}){return(<svg width={size} height={size} viewBox="0 0 60 60" fill="none" xmlns="http://www.w3.org/2000/svg"><rect width="60" height="60" fill="#1f4e5f"/><path d="M20 12C20 12 20 38 20 42C20 50 26 54 33 54C40 54 46 49 46 42C46 35 40 31 34 31C30 31 27 32 25 34V12H20Z" fill="white"/><circle cx="33" cy="42" r="8" fill="white"/><path d="M25 34V42C25 46.4 28.6 50 33 50C37.4 50 41 46.4 41 42C41 37.6 37.4 34 33 34C30.2 34 27.6 35.4 26 37.5" fill="#1f4e5f"/></svg>);}
 
 function Field({label,value,onChange,type="text",placeholder="",required,half}){const[f,setF]=useState(false);return(<div style={{flex:half?"1 1 calc(50% - 10px)":"1 1 100%",minWidth:half?140:0}}><label style={{display:"block",marginBottom:5,fontSize:12.5,fontWeight:600,color:f?NV3:"#4a5568",fontFamily:"'Plus Jakarta Sans',sans-serif"}}>{label}{required&&<span style={{color:"#d64545",marginLeft:2}}>*</span>}</label><input type={type} value={value} placeholder={placeholder} onChange={e=>onChange(e.target.value)} onFocus={()=>setF(true)} onBlur={()=>setF(false)} style={{width:"100%",padding:"10px 14px",border:`1.5px solid ${f?NV3:"#dde1e7"}`,borderRadius:10,fontSize:14,fontFamily:"'Plus Jakarta Sans',sans-serif",color:"#1a202c",background:f?"#f0f4f8":"#fff",outline:"none",boxSizing:"border-box"}} /></div>);}
@@ -65,17 +64,17 @@ export default function App(){
   const slideStyle={opacity:anim?0:1,transform:anim?`translateY(${dir*24}px)`:"translateY(0)",transition:"all 0.35s cubic-bezier(0.4,0,0.2,1)"};
   const months=["Month 1 (Most Recent)","Month 2","Month 3","Month 4"];
 
-  /* ===== BANK UPLOAD PAGE ===== */
   if(page==="bank"){return(<div style={{minHeight:"100vh",background:"#f1f5f9",fontFamily:"'Plus Jakarta Sans',sans-serif"}}><link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" /><TopBar /><AgentCard agent={agent} collapsed={agentCollapsed} onToggle={()=>setAgentCollapsed(!agentCollapsed)} /><div style={{maxWidth:680,margin:"0 auto",padding:"32px 20px 0"}}><div style={{background:"#fff",borderRadius:16,overflow:"hidden",boxShadow:"0 1px 3px rgba(0,0,0,0.05),0 8px 30px rgba(0,0,0,0.06)"}}><SH title="Upload Bank Statements" subtitle="Please upload your last 4 months of business bank statements" /><div style={{padding:"24px 28px 28px",display:"flex",flexDirection:"column",gap:20}}>{months.map((m,i)=>(<div key={i}><label style={{display:"block",marginBottom:6,fontSize:13,fontWeight:600,color:"#4a5568"}}>{m}</label><div style={{border:"2px dashed "+(bankFiles[i]?NV3:"#dde1e7"),borderRadius:12,padding:"16px 20px",background:bankFiles[i]?"#f0f4f8":"#fff",display:"flex",alignItems:"center",gap:12}}><input type="file" accept=".pdf,.png,.jpg,.jpeg" onChange={e=>{const ff=[...bankFiles];ff[i]=e.target.files[0]||null;setBankFiles(ff);}} style={{flex:1,fontSize:13}} />{bankFiles[i]&&<span style={{color:NV3,fontWeight:600}}>{"\u2713"}</span>}</div></div>))}<button onClick={handleBankSubmit} disabled={bankUploading||bankFiles.every(f=>!f)} style={{width:"100%",padding:"14px",borderRadius:12,border:"none",background:bankFiles.some(f=>f)?btnGrad:"#cbd5e1",color:"#fff",fontSize:15,fontWeight:700,cursor:bankFiles.some(f=>f)?"pointer":"not-allowed"}}>{bankUploading?"Uploading...":"Submit Bank Statements"}</button></div></div><Footer /></div><AgentFooter agent={agent} /></div>);}
 
-  /* ===== THANK YOU PAGE ===== */
   if(page==="thanks"){return(<div style={{minHeight:"100vh",display:"flex",flexDirection:"column",background:"#f1f5f9",fontFamily:"'Plus Jakarta Sans',sans-serif"}}><link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" /><TopBar /><AgentCard agent={agent} collapsed={agentCollapsed} onToggle={()=>setAgentCollapsed(!agentCollapsed)} /><div style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}><div style={{textAlign:"center",maxWidth:440}}><div style={{width:72,height:72,borderRadius:"50%",margin:"0 auto 20px",background:`linear-gradient(135deg,${NV1},${NV3})`,display:"flex",alignItems:"center",justifyContent:"center"}}><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg></div><h2 style={{fontSize:28,fontWeight:800,color:"#1a202c",margin:"0 0 8px"}}>Thank You for Applying!</h2><p style={{fontSize:15,color:"#64748b",lineHeight:1.7}}>Your application and bank statements have been received. Our team will review everything and reach out within 24 hours.</p></div></div><div style={{maxWidth:680,margin:"0 auto",padding:"0 20px",width:"100%"}}><Footer /></div><AgentFooter agent={agent} /></div>);}
 
-  /* ===== LANDING / EMAIL PAGE ===== */
+  /* ===== LANDING PAGE ===== */
   if(showEmail){
     const ini=agent?getInitials(agent.Name):"";
     return(<div style={{minHeight:"100vh",display:"flex",flexDirection:"column",background:`linear-gradient(170deg,${NV1} 0%,#0d2137 50%,${NV2} 100%)`,fontFamily:"'Plus Jakarta Sans',sans-serif"}}><link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
     <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"40px 20px 20px"}}>
+      {/* Logo */}
+      <img src={LOGO} alt="Big Think Capital" style={{height:48,objectFit:"contain",marginBottom:28}} />
       {/* Badge */}
       <div style={{display:"inline-flex",alignItems:"center",gap:8,background:"rgba(255,255,255,0.06)",border:"1px solid rgba(255,255,255,0.12)",borderRadius:24,padding:"8px 20px",marginBottom:28}}><div style={{width:8,height:8,borderRadius:"50%",background:"#5b9bd5"}} /><span style={{fontSize:12,fontWeight:700,letterSpacing:"0.14em",color:"rgba(255,255,255,0.8)",textTransform:"uppercase"}}>Funding Application</span></div>
       {/* Heading */}
@@ -84,7 +83,6 @@ export default function App(){
       {/* Card */}
       <div style={{width:"100%",maxWidth:480,borderRadius:20,overflow:"hidden",background:"#fff",boxShadow:"0 25px 60px rgba(0,0,0,0.35)"}}>
         <div style={{padding:"28px 32px 32px"}}>
-          {/* Inline agent card */}
           {agent&&<div style={{display:"flex",alignItems:"center",gap:14,padding:"14px 18px",background:"#f5f8fb",borderRadius:14,border:"1px solid #e4eaf0",marginBottom:24}}>
             <div style={{width:48,height:48,borderRadius:"50%",background:`linear-gradient(135deg,${NV1},${NV3})`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,overflow:"hidden"}}>{agent.Photo?<img src={agent.Photo} alt="" style={{width:"100%",height:"100%",objectFit:"cover"}} />:<span style={{color:"#fff",fontSize:16,fontWeight:700}}>{ini}</span>}</div>
             <div style={{flex:1,minWidth:0}}>
@@ -94,15 +92,12 @@ export default function App(){
             </div>
             <div style={{display:"flex",alignItems:"center",gap:5,flexShrink:0}}><div style={{width:7,height:7,borderRadius:"50%",background:"#22c55e"}} /><span style={{fontSize:11,color:"#64748b",fontWeight:500}}>Available now</span></div>
           </div>}
-          {/* Email field */}
           <label style={{display:"block",marginBottom:6,fontSize:11,fontWeight:700,letterSpacing:"0.08em",color:"#4a5568",textTransform:"uppercase"}}>EMAIL ADDRESS <span style={{color:"#d64545"}}>*</span></label>
           <div style={{display:"flex",alignItems:"center",gap:12,padding:"14px 18px",border:"1.5px solid #dde1e7",borderRadius:12,marginBottom:24,background:"#fff"}}>
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" strokeWidth="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M22 4l-10 8L2 4"/></svg>
             <input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@yourcompany.com" style={{flex:1,border:"none",outline:"none",fontSize:15,fontFamily:"'Plus Jakarta Sans',sans-serif",color:"#1a202c",background:"transparent"}} />
           </div>
-          {/* Continue button */}
           <button onClick={()=>{_email=email;sendWebhook({event:"email_entered",step:"email",email});setShowEmail(false);}} disabled={!email} style={{width:"100%",padding:"16px",borderRadius:12,border:"none",background:email?`linear-gradient(135deg,${NV2},${NV3})`:"#cbd5e1",color:"#fff",fontSize:16,fontWeight:700,cursor:email?"pointer":"not-allowed",boxShadow:email?"0 4px 14px rgba(10,25,41,0.4)":"none",display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>Continue <span>{"\u2192"}</span></button>
-          {/* Security note */}
           <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:8,marginTop:18}}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" strokeWidth="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
             <span style={{fontSize:12,color:"#94a3b8"}}>256-bit SSL encrypted {"\u00b7"} Your information is never sold</span>
@@ -110,7 +105,7 @@ export default function App(){
         </div>
       </div>
     </div>
-    {/* Stats bar */}
+    {/* Stats */}
     <div style={{display:"flex",justifyContent:"center",gap:0,padding:"28px 20px 36px"}}>
       {[{val:"$2B+",label:"FUNDED"},{val:"24hr",label:"APPROVALS"},{val:"10K+",label:"BUSINESSES FUNDED"}].map((s,i)=>(<div key={i} style={{textAlign:"center",flex:1,maxWidth:200,borderLeft:i>0?"1px solid rgba(255,255,255,0.12)":"none",padding:"0 20px"}}><p style={{margin:0,fontSize:"clamp(24px,3vw,32px)",fontWeight:800,color:"#fff"}}>{s.val}</p><p style={{margin:"4px 0 0",fontSize:10,fontWeight:600,letterSpacing:"0.1em",color:"rgba(255,255,255,0.45)",textTransform:"uppercase"}}>{s.label}</p></div>))}
     </div>
