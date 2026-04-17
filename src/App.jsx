@@ -26,7 +26,6 @@ function fmtMoney(v){if(!v)return"";const n=String(v).replace(/[^0-9.]/g,"");if(
 function rawMoney(v){return String(v).replace(/[^0-9.]/g,"");}
 function isBirthdayToday(dob){if(!dob)return false;const today=new Date();const[y,m,d]=dob.split("-").map(Number);return m===today.getMonth()+1&&d===today.getDate();}
 function extractDomain(email){if(!email||!email.includes("@"))return"";const domain=email.split("@")[1]?.toLowerCase();if(!domain)return"";return COMMON_DOMAINS.includes(domain)?"":domain;}
-
 // Convert File to base64
 function fileToBase64(file){return new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=reject;reader.readAsDataURL(file);});}
 
@@ -66,61 +65,36 @@ export default function App(){
 
   const handleEmailSubmit=async()=>{_email=email;sendWebhook({event:"email_entered",step:"email",email});setLoading(true);try{const res=await fetch(LOOKUP_WEBHOOK+"?email="+encodeURIComponent(email));const d=await res.json();const data=Array.isArray(d)?d[0]:d;if(data&&data.found!=="false"&&data.notFound!==true){const nb={...biz};nb.name=getVal(data,"Company","company","businessName")||nb.name;nb.dba=getVal(data,"DBA_Name__c","dba")||nb.dba;nb.startDate=getVal(data,"Business_Start_Date__c","businessStartDate")||nb.startDate;nb.entity=getVal(data,"Legal_Entity__c","legalEntity")||nb.entity;nb.industry=getVal(data,"Industry","industry")||nb.industry;nb.taxId=getVal(data,"Federal_Tax_Id__c","taxId")||nb.taxId;nb.description=getVal(data,"Description","description")||nb.description;nb.amountRequested=getVal(data,"Amount_Requested__c","amountRequested")||nb.amountRequested;nb.annualRevenue=getVal(data,"Annual_Revenue__c","annualRevenue","Business_Income__c")||nb.annualRevenue;nb.useOfProceeds=getVal(data,"Use_of_Proceeds__c","useOfProceeds")||nb.useOfProceeds;nb.product=getVal(data,"Products_Interested_In__c","product","Real_Estate_Loan_Type__c")||nb.product;nb.address=getVal(data,"Street","Real_Estate_Address__c","businessAddress")||nb.address;nb.city=getVal(data,"City","Real_Estate_City__c")||nb.city;nb.state=getVal(data,"State","Real_Estate_State__c")||nb.state;nb.zip=getVal(data,"PostalCode","Real_Estate_Zip__c")||nb.zip;nb.website=getVal(data,"Website","website")||nb.website;nb.phone=getVal(data,"Phone","phone")||nb.phone;nb.ownRealEstate=getVal(data,"Rent_or_Own__c","ownsRealEstate")||nb.ownRealEstate;nb.openLoans=getVal(data,"Has_Open_Business_Loans__c","hasOpenBusinessLoans")||nb.openLoans;if(!nb.website){const domain=extractDomain(email);if(domain)nb.website="https://"+domain;}setBiz(nb);const no={...owners[0]};no.firstName=getVal(data,"FirstName","firstName")||no.firstName;no.lastName=getVal(data,"LastName","lastName")||no.lastName;no.dob=getVal(data,"csbs__Birthdate__c","dob")||no.dob;no.ssn=getVal(data,"csbs__Social_Security_Number_Unencrypted__c","ssn")||no.ssn;no.ownership=getVal(data,"Ownership_Percentage__c","ownership")||no.ownership;no.creditScore=getVal(data,"csbs__CreditScore__c","creditScore")||no.creditScore;no.address=getVal(data,"csbs__Home_Address_Street__c","ownerAddress")||no.address;no.city=getVal(data,"csbs__Home_Address_City__c","ownerCity")||no.city;no.state=getVal(data,"csbs__Home_Address_State__c","ownerState")||no.state;no.zip=getVal(data,"csbs__Home_Address_Zip_Code__c","ownerZip")||no.zip;no.email=getVal(data,"Email","email")||email;no.cell=getVal(data,"MobilePhone","Phone","cell")||no.cell;const nOwners=[no,...owners.slice(1)];const o2=getVal(data,"csbs__Owner_2_First_Name__c");if(o2){const o2o=emptyOwner();o2o.firstName=o2;o2o.lastName=getVal(data,"csbs__Owner_2_Last_Name__c");o2o.dob=getVal(data,"csbs__Owner_2_Birthday__c");o2o.ssn=getVal(data,"csbs__Owner_2_Social_Security_Number__c");o2o.creditScore=getVal(data,"csbs__Owner_2_CreditScore__c");o2o.address=getVal(data,"csbs__Owner_2_Home_Address_Street__c");o2o.city=getVal(data,"csbs__Owner_2_Home_Address_City__c");o2o.state=getVal(data,"csbs__Owner_2_Home_Address_State__c");o2o.zip=getVal(data,"csbs__Owner_2_Home_Address_Zip_Code__c");o2o.email=getVal(data,"csbs__Owner_2_Email__c");o2o.cell=getVal(data,"csbs__Owner_2_Mobile__c");nOwners.push(o2o);}setOwners(nOwners);}}catch(e){console.log("Lookup error:",e);}setLoading(false);setShowEmail(false);};
 
+  // Bank upload - converts files to base64 and sends via webhook
   const addBankSlot=()=>setBankFiles(p=>[...p,null]);
   const requiredBankCount=4;
-
-  // Convert files to base64 and send via webhook
   const handleBankSubmit=async()=>{
     const missing=bankFiles.slice(0,requiredBankCount).filter(f=>!f).length;
     if(missing>0){setErrors({bank:`First ${requiredBankCount} months are required`});return;}
-    setErrors({});setBankUploading(true);setUploadProgress("Preparing files...");
+    setErrors({});setBankUploading(true);setUploadProgress("Converting files...");
     try{
-      const fileData=[];
+      const filesData=[];
       const validFiles=bankFiles.filter(f=>f);
       for(let i=0;i<validFiles.length;i++){
-        setUploadProgress(`Encoding file ${i+1} of ${validFiles.length}...`);
+        setUploadProgress(`Processing file ${i+1} of ${validFiles.length}...`);
         const file=validFiles[i];
         const base64=await fileToBase64(file);
-        fileData.push({
-          name:file.name,
-          type:file.type||"application/octet-stream",
-          size:file.size,
-          data:base64,
-          label:i<4?["Month 1 (Most Recent)","Month 2","Month 3","Month 4"][i]:`Additional Document ${i-3}`
-        });
+        filesData.push({name:file.name,type:file.type,size:file.size,data:base64});
       }
       setUploadProgress("Uploading to server...");
-      await fetch(WEBHOOK,{
-        method:"POST",
-        headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({
-          event:"bank_statements_uploaded",
-          step:"bank_upload",
-          email:_email,
-          timestamp:new Date().toISOString(),
-          agent_param:getParam("agent")||undefined,
-          agent_info:_agentData||undefined,
-          total_files:fileData.length,
-          files:fileData
-        })
-      });
-      setUploadProgress("Complete!");
-      setTimeout(()=>{setBankUploading(false);setUploadProgress("");setPage("thanks");},800);
-    }catch(e){
-      console.error("Upload error:",e);
-      setUploadProgress("");setBankUploading(false);
-      setErrors({bank:"Upload failed. Please try again."});
-    }
+      await fetch(WEBHOOK,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({event:"bank_statements_uploaded",step:"bank_upload",email:_email,timestamp:new Date().toISOString(),agent_param:getParam("agent")||undefined,agent_info:_agentData||undefined,total_files:filesData.length,files:filesData})});
+      setUploadProgress("");setBankUploading(false);setPage("thanks");
+    }catch(e){console.error("Upload error:",e);setUploadProgress("");setBankUploading(false);setErrors({bank:"Upload failed. Please try again."});}
   };
 
   const slideStyle={opacity:anim?0:1,transform:anim?`translateY(${dir*24}px)`:"translateY(0)",transition:"all 0.35s cubic-bezier(0.4,0,0.2,1)"};
   const errStyle={fontSize:11,color:"#d64545",marginTop:3};
 
   if(page==="bank"){return(<div style={{minHeight:"100vh",background:"#f1f5f9",fontFamily:"'Plus Jakarta Sans',sans-serif"}}><link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" /><style>{`@keyframes spin{to{transform:rotate(360deg);}}`}</style><TopBar /><AgentCard agent={agent} collapsed={agentCollapsed} onToggle={()=>setAgentCollapsed(!agentCollapsed)} /><div style={{maxWidth:680,margin:"0 auto",padding:"32px 20px 0"}}><div style={{background:"#fff",borderRadius:16,overflow:"hidden",boxShadow:"0 1px 3px rgba(0,0,0,0.05),0 8px 30px rgba(0,0,0,0.06)"}}><SH title="Upload Bank Statements" subtitle="Please upload your last 4 months of business bank statements" /><div style={{padding:"24px 28px 28px",display:"flex",flexDirection:"column",gap:16}}>
-    {bankFiles.map((f,i)=>{const isRequired=i<requiredBankCount;const label=i<4?["Month 1 (Most Recent)","Month 2","Month 3","Month 4"][i]:`Additional Document ${i-3}`;return(<div key={i}><div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6}}><label style={{fontSize:13,fontWeight:600,color:"#4a5568"}}>{label}{isRequired&&<span style={{color:"#d64545",marginLeft:4}}>*</span>}</label>{i>=requiredBankCount&&<button onClick={()=>setBankFiles(p=>p.filter((_,j)=>j!==i))} style={{background:"none",border:"none",color:"#d64545",fontSize:12,fontWeight:600,cursor:"pointer"}}>Remove</button>}</div><div style={{border:"2px dashed "+(f?NV3:isRequired&&errors.bank?"#d64545":"#dde1e7"),borderRadius:12,padding:"14px 18px",background:f?"#f0f4f8":"#fff",display:"flex",alignItems:"center",gap:12}}><input type="file" accept=".pdf,.png,.jpg,.jpeg" onChange={e=>{const ff=[...bankFiles];ff[i]=e.target.files[0]||null;setBankFiles(ff);setErrors({});}} style={{flex:1,fontSize:13}} />{f&&<div style={{display:"flex",alignItems:"center",gap:6,flexShrink:0}}><span style={{fontSize:11,color:"#64748b"}}>{(f.size/1024/1024).toFixed(1)}MB</span><span style={{color:NV3,fontWeight:600}}>{"\u2713"}</span></div>}</div></div>);})}
+    {bankFiles.map((f,i)=>{const isRequired=i<requiredBankCount;const label=i<4?["Month 1 (Most Recent)","Month 2","Month 3","Month 4"][i]:`Additional Document ${i-3}`;return(<div key={i}><div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6}}><label style={{fontSize:13,fontWeight:600,color:"#4a5568"}}>{label}{isRequired&&<span style={{color:"#d64545",marginLeft:4}}>*</span>}</label>{i>=requiredBankCount&&<button onClick={()=>setBankFiles(p=>p.filter((_,j)=>j!==i))} style={{background:"none",border:"none",color:"#d64545",fontSize:12,fontWeight:600,cursor:"pointer"}}>Remove</button>}</div><div style={{border:"2px dashed "+(f?NV3:isRequired&&errors.bank?"#d64545":"#dde1e7"),borderRadius:12,padding:"14px 18px",background:f?"#f0f4f8":"#fff",display:"flex",alignItems:"center",gap:12}}><input type="file" accept=".pdf,.png,.jpg,.jpeg" onChange={e=>{const ff=[...bankFiles];ff[i]=e.target.files[0]||null;setBankFiles(ff);setErrors({});}} style={{flex:1,fontSize:13}} />{f&&<div style={{display:"flex",alignItems:"center",gap:6}}><span style={{fontSize:11,color:"#64748b"}}>{(f.size/1024).toFixed(0)}KB</span><span style={{color:NV3,fontWeight:600}}>{"\u2713"}</span></div>}</div></div>);})}
     <button onClick={addBankSlot} style={{width:"100%",padding:"12px",border:"2px dashed #c8d5db",borderRadius:12,background:"#f8fbfc",color:NV2,fontSize:13,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:8}}><span style={{fontSize:16}}>+</span> Add Additional Document</button>
     {errors.bank&&<p style={errStyle}>{errors.bank}</p>}
-    <button onClick={handleBankSubmit} disabled={bankUploading} style={{width:"100%",padding:"14px",borderRadius:12,border:"none",background:btnGrad,color:"#fff",fontSize:15,fontWeight:700,cursor:bankUploading?"not-allowed":"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:10}}>
+    <button onClick={handleBankSubmit} disabled={bankUploading} style={{width:"100%",padding:"14px",borderRadius:12,border:"none",background:btnGrad,color:"#fff",fontSize:15,fontWeight:700,cursor:bankUploading?"not-allowed":"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>
       {bankUploading?<><div style={{width:18,height:18,border:"2px solid rgba(255,255,255,0.3)",borderTopColor:"#fff",borderRadius:"50%",animation:"spin 0.7s linear infinite"}} />{uploadProgress}</>:"Submit Bank Statements"}
     </button>
   </div></div><Footer /></div><AgentFooter agent={agent} /></div>);}
