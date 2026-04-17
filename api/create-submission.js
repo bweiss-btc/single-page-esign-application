@@ -2,6 +2,11 @@ const AGENT_WEBHOOK = "https://n8n.bigthinkcapital.com/webhook/94fb281b-d231-464
 const MAIN_WEBHOOK = "https://n8n.bigthinkcapital.com/webhook/ec9ccd01-c951-42b3-ac51-27a3077f6648";
 
 export default async function handler(req, res) {
+  // Determine the correct app URL from the request host
+  const host = req.headers.host || "application.bigthinkcapital.com";
+  const protocol = host.includes("localhost") ? "http" : "https";
+  const APP_URL = `${protocol}://${host}`;
+
   // ===== GET = agent lookup proxy (avoids CORS) =====
   if (req.method === "GET") {
     const { agent } = req.query;
@@ -20,33 +25,22 @@ export default async function handler(req, res) {
     }
   }
 
-  // ===== PUT = DocuSeal webhook (signing completed) =====
-  // DocuSeal sends POST but we use the query param to distinguish
-  if (req.method === "PUT" || (req.method === "POST" && req.query.source === "docuseal")) {
+  // ===== DocuSeal webhook (signing completed) =====
+  if (req.method === "POST" && req.query.source === "docuseal") {
     console.log("DocuSeal webhook received:", JSON.stringify(req.body).slice(0, 500));
     try {
       const payload = req.body || {};
       const eventType = payload.event_type || payload.event || "submission.completed";
-      
-      // Extract key data from DocuSeal webhook payload
       const submissionData = payload.data || payload;
       const submitters = submissionData.submitters || [];
       const firstSubmitter = submitters[0] || {};
-      
-      // Get signed document URLs
       const documents = [];
       if (submissionData.documents) documents.push(...submissionData.documents);
       if (firstSubmitter.documents) documents.push(...firstSubmitter.documents);
-      
-      // Get all field values from the signed submission
       const fields = {};
       if (firstSubmitter.fields && Array.isArray(firstSubmitter.fields)) {
-        for (const f of firstSubmitter.fields) {
-          fields[f.name] = f.value;
-        }
+        for (const f of firstSubmitter.fields) { fields[f.name] = f.value; }
       }
-
-      // Forward everything to the main n8n webhook
       const webhookPayload = {
         event: "application_signed",
         step: "docuseal_completed",
@@ -57,21 +51,12 @@ export default async function handler(req, res) {
         submitter_id: firstSubmitter.id || null,
         slug: firstSubmitter.slug || null,
         status: firstSubmitter.status || submissionData.status || "completed",
-        signed_documents: documents.map(d => ({
-          name: d.name || d.filename || "signed-document",
-          url: d.url || d.download_url || null
-        })),
+        signed_documents: documents.map(d => ({ name: d.name || d.filename || "signed-document", url: d.url || d.download_url || null })),
         fields: fields,
         raw_payload: payload
       };
-
-      const webhookRes = await fetch(MAIN_WEBHOOK, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(webhookPayload)
-      });
+      const webhookRes = await fetch(MAIN_WEBHOOK, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(webhookPayload) });
       console.log("Forwarded to n8n:", webhookRes.status);
-
       return res.status(200).json({ success: true, message: "Webhook processed" });
     } catch (error) {
       console.error("DocuSeal webhook error:", error.message);
@@ -83,7 +68,6 @@ export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
   const { DOCUSEAL_BASE_ENDPOINT, DOCUSEAL_TEMPLATE_ID, DOCUSEAL_API_KEY } = process.env;
-  const APP_URL = "https://single-page-esign-application.vercel.app";
 
   if (!DOCUSEAL_API_KEY) return res.status(500).json({ error: "DOCUSEAL_API_KEY is not set" });
   if (!DOCUSEAL_BASE_ENDPOINT) return res.status(500).json({ error: "DOCUSEAL_BASE_ENDPOINT is not set" });
@@ -92,16 +76,10 @@ export default async function handler(req, res) {
   try {
     const { business, owners, email } = req.body;
 
-    // Send form data to webhook
     try {
-      await fetch(MAIN_WEBHOOK, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ event: "application_submitted", step: "docuseal_created", timestamp: new Date().toISOString(), email, business, owners })
-      });
+      await fetch(MAIN_WEBHOOK, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ event: "application_submitted", step: "docuseal_created", timestamp: new Date().toISOString(), email, business, owners }) });
     } catch (e) {}
 
-    // Build pre-fill fields
     const fields = [];
     const today = new Date().toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" });
     const ownerEmail = email || owners?.[0]?.email || "";
@@ -120,8 +98,8 @@ export default async function handler(req, res) {
     fields.push({ name: "Owner Signature Date", default_value: today, readonly: true });
 
     const submitterEmail = ownerEmail || "applicant@example.com";
-    
-    // Set completed_redirect_url AND webhook_url for DocuSeal
+
+    // Use the dynamically determined APP_URL for redirects
     const payload = {
       template_id: parseInt(DOCUSEAL_TEMPLATE_ID),
       send_email: false,
@@ -142,6 +120,7 @@ export default async function handler(req, res) {
 
     const responseText = await response.text();
     console.log("DocuSeal:", response.status, responseText);
+    console.log("Redirect URL:", APP_URL + "/?signed=true");
 
     if (!response.ok) return res.status(response.status).json({ error: "DocuSeal error (" + response.status + "): " + responseText });
 
