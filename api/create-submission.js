@@ -9,19 +9,76 @@ export default async function handler(req, res) {
 
   try {
     const { business, owners, email } = req.body;
+    const fields = [];
+
+    if (business) {
+      const map = {
+        "Business Name": business.name,
+        "DBA Name": business.dba,
+        "Business Start Date": business.startDate,
+        "Legal Entity": business.entity,
+        "Industry": business.industry,
+        "Tax Id": business.taxId,
+        "Business Description": business.description,
+        "Amount Requested": business.amountRequested,
+        "Annual Revenue": business.annualRevenue,
+        "Use of Proceeds": business.useOfProceeds,
+        "Products Interested In": business.product,
+        "Business Address": business.address,
+        "Business City": business.city,
+        "Business State": business.state,
+        "Business Zip": business.zip,
+        "Website": business.website,
+        "Phone": business.phone,
+        "Owns Real Estate": business.ownRealEstate,
+        "Has Open Business Loans": business.openLoans
+      };
+      for (const [name, value] of Object.entries(map)) {
+        if (value && String(value).trim() !== "") {
+          fields.push({ name, default_value: String(value), readonly: true });
+        }
+      }
+    }
+
+    if (owners && owners.length > 0) {
+      const o = owners[0];
+      const ownerMap = {
+        "Owner First Name": o.firstName,
+        "Owner Last Name": o.lastName,
+        "Owner Birthday": o.dob,
+        "Owner SSN": o.ssn,
+        "Owner Percentage": o.ownership,
+        "Owner Address": o.address,
+        "Owner City": o.city,
+        "Owner State": o.state,
+        "Owner Zip": o.zip,
+        "Owner Credit Score": o.creditScore,
+        "Owner Email": o.email,
+        "Owner Phone": o.cell
+      };
+      for (const [name, value] of Object.entries(ownerMap)) {
+        if (value && String(value).trim() !== "") {
+          fields.push({ name, default_value: String(value), readonly: true });
+        }
+      }
+    }
+
     const submitterEmail = email || owners?.[0]?.email || "applicant@example.com";
 
     const payload = {
       template_id: parseInt(DOCUSEAL_TEMPLATE_ID),
       send_email: false,
       submitters: [{
-        email: submitterEmail
+        email: submitterEmail,
+        role: "Owner 1",
+        fields: fields.length > 0 ? fields : undefined
       }]
     };
 
     console.log("DocuSeal request:", DOCUSEAL_BASE_ENDPOINT + "/api/submissions");
     console.log("Template ID:", DOCUSEAL_TEMPLATE_ID);
-    console.log("Email:", submitterEmail);
+    console.log("Fields count:", fields.length);
+    console.log("Field names:", fields.map(f => f.name).join(", "));
 
     const response = await fetch(DOCUSEAL_BASE_ENDPOINT + "/api/submissions", {
       method: "POST",
