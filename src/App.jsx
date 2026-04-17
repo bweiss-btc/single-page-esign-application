@@ -6,6 +6,7 @@ const PRODUCT_OPTS = ["Term Loan", "Line of Credit", "SBA Loan", "Equipment Fina
 const YES_NO = ["Yes", "No"];
 const emptyOwner = () => ({ firstName: "", lastName: "", dob: "", ssn: "", ownership: "", creditScore: "", address: "", city: "", state: "", zip: "", email: "", cell: "" });
 const WEBHOOK = "https://n8n.bigthinkcapital.com/webhook/ec9ccd01-c951-42b3-ac51-27a3077f6648";
+const LOOKUP_WEBHOOK = "https://n8n.bigthinkcapital.com/webhook/e41ebca9-5f6c-49b2-af2c-cd4299edf4ytd";
 const LOGO = "https://bigthink-capital-assets.s3.us-east-1.amazonaws.com/images/company-logo.png";
 const NV1="#0a1929";const NV2="#132f4c";const NV3="#1a4971";
 
@@ -33,9 +34,7 @@ function AgentCard({agent,collapsed,onToggle}){
       <p style={{margin:0,fontSize:12,fontWeight:700,letterSpacing:"0.12em",color:"rgba(255,255,255,0.85)",textTransform:"uppercase",lineHeight:1.4,paddingTop:4}}>YOUR ASSIGNED FUNDING EXPERT</p>
     </div>
     <div style={{textAlign:"center",marginTop:-44,padding:"0 28px 28px"}}>
-      <div style={{width:84,height:84,borderRadius:"50%",border:"4px solid #fff",display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 16px",overflow:"hidden",boxShadow:"0 6px 20px rgba(0,0,0,0.25)"}}>
-        {agent.Photo?<img src={agent.Photo} alt="" style={{width:"100%",height:"100%",objectFit:"cover"}} />:<BIcon size={84} />}
-      </div>
+      <div style={{width:84,height:84,borderRadius:"50%",border:"4px solid #fff",display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 16px",overflow:"hidden",boxShadow:"0 6px 20px rgba(0,0,0,0.25)"}}>{agent.Photo?<img src={agent.Photo} alt="" style={{width:"100%",height:"100%",objectFit:"cover"}} />:<BIcon size={84} />}</div>
       <p style={{margin:"0 0 24px",fontSize:22,fontWeight:600,color:"#1a202c"}}>{agent.Name}</p>
       {agent.Email&&<a href={"mailto:"+agent.Email} style={{display:"flex",alignItems:"center",justifyContent:"center",gap:10,padding:"13px 18px",background:"#f5f7f9",borderRadius:28,textDecoration:"none",color:NV2,fontSize:13,fontWeight:500,marginBottom:12,border:"1px solid #e4e9ed"}}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={NV2} strokeWidth="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M22 4l-10 8L2 4"/></svg>{agent.Email}</a>}
       {agent.Phone&&<a href={"tel:"+agent.Phone} style={{display:"flex",alignItems:"center",justifyContent:"center",gap:10,padding:"13px 18px",background:"#f5f7f9",borderRadius:28,textDecoration:"none",color:NV2,fontSize:13,fontWeight:500,border:"1px solid #e4e9ed"}}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={NV2} strokeWidth="2"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.79 19.79 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z"/></svg>{agent.Phone}</a>}
@@ -51,7 +50,7 @@ function sendWebhook(data){try{fetch(WEBHOOK,{method:"POST",headers:{"Content-Ty
 
 export default function App(){
   const isSigned=getParam("signed")==="true";
-  const[showEmail,setShowEmail]=useState(!isSigned);const[email,setEmail]=useState("");const[step,setStep]=useState(0);const[anim,setAnim]=useState(false);const[dir,setDir]=useState(1);const[docLoading,setDocLoading]=useState(false);const[docError,setDocError]=useState(null);const[page,setPage]=useState(isSigned?"bank":"form");const[bankFiles,setBankFiles]=useState([null,null,null,null]);const[bankUploading,setBankUploading]=useState(false);const[agent,setAgent]=useState(null);const[agentCollapsed,setAgentCollapsed]=useState(false);
+  const[showEmail,setShowEmail]=useState(!isSigned);const[email,setEmail]=useState("");const[step,setStep]=useState(0);const[anim,setAnim]=useState(false);const[dir,setDir]=useState(1);const[docLoading,setDocLoading]=useState(false);const[docError,setDocError]=useState(null);const[page,setPage]=useState(isSigned?"bank":"form");const[bankFiles,setBankFiles]=useState([null,null,null,null]);const[bankUploading,setBankUploading]=useState(false);const[agent,setAgent]=useState(null);const[agentCollapsed,setAgentCollapsed]=useState(false);const[loading,setLoading]=useState(false);
   const[biz,setBiz]=useState({name:"",dba:"",startDate:"",entity:"",industry:"",taxId:"",description:"",amountRequested:"",annualRevenue:"",useOfProceeds:"",product:"",address:"",city:"",state:"",zip:"",website:"",phone:"",ownRealEstate:"",openLoans:""});
   const[owners,setOwners]=useState([emptyOwner()]);
   const upBiz=(k,v)=>setBiz(p=>({...p,[k]:v}));const upOwner=(idx,k,v)=>setOwners(p=>p.map((o,i)=>i===idx?{...o,[k]:v}:o));const goTo=n=>{if(n===step||anim)return;setDir(n>step?1:-1);setAnim(true);setTimeout(()=>{setStep(n);setTimeout(()=>setAnim(false),50);},220);};
@@ -60,6 +59,34 @@ export default function App(){
   useEffect(()=>{const a=getParam("agent");if(a){fetch("/api/create-submission?agent="+encodeURIComponent(a)).then(r=>r.json()).then(raw=>{const ag=normalizeAgent(raw);if(ag){setAgent(ag);_agentData=ag;}}).catch(()=>{});}},[]);
   const initDocuSeal=useCallback(async()=>{setDocLoading(true);setDocError(null);try{const res=await fetch("/api/create-submission",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({business:biz,owners,email})});const data=await res.json();if(!res.ok)throw new Error(data.error||"Failed");window.location.href=data.signingUrl;}catch(err){setDocError(err.message);setDocLoading(false);}},[biz,owners,email]);
   useEffect(()=>{if(step===2&&!docLoading&&!docError){initDocuSeal();}},[step]);
+
+  // Lookup applicant by email and auto-populate fields
+  const handleEmailSubmit=async()=>{
+    _email=email;
+    sendWebhook({event:"email_entered",step:"email",email});
+    setLoading(true);
+    try{
+      const res=await fetch(LOOKUP_WEBHOOK,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email})});
+      const d=await res.json();
+      const data=Array.isArray(d)?d[0]:d;
+      if(data){
+        // Auto-populate business fields (only fill non-empty values)
+        const bizMap={name:"businessName",dba:"dba",startDate:"businessStartDate",entity:"legalEntity",industry:"industry",taxId:"taxId",description:"businessDescription",amountRequested:"amountRequested",annualRevenue:"annualRevenue",useOfProceeds:"useOfProceeds",product:"productsInterestedIn",address:"businessAddress",city:"businessCity",state:"businessState",zip:"businessZip",website:"website",phone:"phone",ownRealEstate:"ownsRealEstate",openLoans:"hasOpenBusinessLoans"};
+        const newBiz={...biz};
+        for(const[key,field]of Object.entries(bizMap)){const v=data[field]||data[field.charAt(0).toUpperCase()+field.slice(1)];if(v&&String(v).trim())newBiz[key]=String(v);}
+        setBiz(newBiz);
+        // Auto-populate owner fields
+        const ownerMap={firstName:"ownerFirstName",lastName:"ownerLastName",dob:"ownerBirthday",ssn:"ownerSSN",ownership:"ownerPercentage",creditScore:"ownerCreditScore",address:"ownerAddress",city:"ownerCity",state:"ownerState",zip:"ownerZip",email:"ownerEmail",cell:"ownerPhone"};
+        const newOwner={...owners[0]};
+        for(const[key,field]of Object.entries(ownerMap)){const v=data[field]||data[field.charAt(0).toUpperCase()+field.slice(1)];if(v&&String(v).trim())newOwner[key]=String(v);}
+        if(!newOwner.email&&email)newOwner.email=email;
+        setOwners([newOwner,...owners.slice(1)]);
+      }
+    }catch(e){console.log("Lookup error:",e);}
+    setLoading(false);
+    setShowEmail(false);
+  };
+
   const handleBankSubmit=async()=>{setBankUploading(true);sendWebhook({event:"bank_statements_uploaded",step:"bank_upload",files:bankFiles.map(f=>f?f.name:null)});setTimeout(()=>{setBankUploading(false);setPage("thanks");},1500);};
   const slideStyle={opacity:anim?0:1,transform:anim?`translateY(${dir*24}px)`:"translateY(0)",transition:"all 0.35s cubic-bezier(0.4,0,0.2,1)"};
   const months=["Month 1 (Most Recent)","Month 2","Month 3","Month 4"];
@@ -71,44 +98,28 @@ export default function App(){
   /* ===== LANDING PAGE ===== */
   if(showEmail){
     const ini=agent?getInitials(agent.Name):"";
-    return(<div style={{minHeight:"100vh",display:"flex",flexDirection:"column",background:`linear-gradient(170deg,${NV1} 0%,#0d2137 50%,${NV2} 100%)`,fontFamily:"'Plus Jakarta Sans',sans-serif"}}><link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-    <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"40px 20px 20px"}}>
-      {/* Logo */}
-      <img src={LOGO} alt="Big Think Capital" style={{height:48,objectFit:"contain",marginBottom:28}} />
-      {/* Badge */}
+    return(<div style={{minHeight:"100vh",display:"flex",flexDirection:"column",background:`linear-gradient(170deg,${NV1} 0%,#0d2137 50%,${NV2} 100%)`,fontFamily:"'Plus Jakarta Sans',sans-serif"}}><link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" /><style>{`@keyframes spin{to{transform:rotate(360deg);}}`}</style>
+    {/* Light header bar */}
+    <div style={{background:"rgba(255,255,255,0.06)",backdropFilter:"blur(10px)",borderBottom:"1px solid rgba(255,255,255,0.08)",padding:"14px 28px",display:"flex",alignItems:"center",justifyContent:"center"}}><img src={LOGO} alt="Big Think Capital" style={{height:38,objectFit:"contain"}} /></div>
+    <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"32px 20px 20px"}}>
       <div style={{display:"inline-flex",alignItems:"center",gap:8,background:"rgba(255,255,255,0.06)",border:"1px solid rgba(255,255,255,0.12)",borderRadius:24,padding:"8px 20px",marginBottom:28}}><div style={{width:8,height:8,borderRadius:"50%",background:"#5b9bd5"}} /><span style={{fontSize:12,fontWeight:700,letterSpacing:"0.14em",color:"rgba(255,255,255,0.8)",textTransform:"uppercase"}}>Funding Application</span></div>
-      {/* Heading */}
       <h1 style={{margin:"0 0 12px",fontSize:"clamp(32px,5vw,48px)",fontWeight:800,color:"#fff",textAlign:"center",lineHeight:1.15}}>Ready to Get Funded?</h1>
       <p style={{margin:"0 0 32px",fontSize:16,color:"rgba(255,255,255,0.55)",textAlign:"center",maxWidth:420,lineHeight:1.6}}>Enter your email to retrieve a saved application or start a new one in minutes.</p>
-      {/* Card */}
       <div style={{width:"100%",maxWidth:480,borderRadius:20,overflow:"hidden",background:"#fff",boxShadow:"0 25px 60px rgba(0,0,0,0.35)"}}>
         <div style={{padding:"28px 32px 32px"}}>
           {agent&&<div style={{display:"flex",alignItems:"center",gap:14,padding:"14px 18px",background:"#f5f8fb",borderRadius:14,border:"1px solid #e4eaf0",marginBottom:24}}>
             <div style={{width:48,height:48,borderRadius:"50%",background:`linear-gradient(135deg,${NV1},${NV3})`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,overflow:"hidden"}}>{agent.Photo?<img src={agent.Photo} alt="" style={{width:"100%",height:"100%",objectFit:"cover"}} />:<span style={{color:"#fff",fontSize:16,fontWeight:700}}>{ini}</span>}</div>
-            <div style={{flex:1,minWidth:0}}>
-              <p style={{margin:0,fontSize:10,fontWeight:700,letterSpacing:"0.1em",color:NV3,textTransform:"uppercase"}}>YOUR ASSIGNED EXPERT</p>
-              <p style={{margin:"2px 0 0",fontSize:15,fontWeight:700,color:"#1a202c"}}>{agent.Name}</p>
-              {agent.Phone&&<p style={{margin:"1px 0 0",fontSize:12.5,color:"#64748b"}}>{agent.Phone}</p>}
-            </div>
+            <div style={{flex:1,minWidth:0}}><p style={{margin:0,fontSize:10,fontWeight:700,letterSpacing:"0.1em",color:NV3,textTransform:"uppercase"}}>YOUR ASSIGNED EXPERT</p><p style={{margin:"2px 0 0",fontSize:15,fontWeight:700,color:"#1a202c"}}>{agent.Name}</p>{agent.Phone&&<p style={{margin:"1px 0 0",fontSize:12.5,color:"#64748b"}}>{agent.Phone}</p>}</div>
             <div style={{display:"flex",alignItems:"center",gap:5,flexShrink:0}}><div style={{width:7,height:7,borderRadius:"50%",background:"#22c55e"}} /><span style={{fontSize:11,color:"#64748b",fontWeight:500}}>Available now</span></div>
           </div>}
           <label style={{display:"block",marginBottom:6,fontSize:11,fontWeight:700,letterSpacing:"0.08em",color:"#4a5568",textTransform:"uppercase"}}>EMAIL ADDRESS <span style={{color:"#d64545"}}>*</span></label>
-          <div style={{display:"flex",alignItems:"center",gap:12,padding:"14px 18px",border:"1.5px solid #dde1e7",borderRadius:12,marginBottom:24,background:"#fff"}}>
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" strokeWidth="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M22 4l-10 8L2 4"/></svg>
-            <input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@yourcompany.com" style={{flex:1,border:"none",outline:"none",fontSize:15,fontFamily:"'Plus Jakarta Sans',sans-serif",color:"#1a202c",background:"transparent"}} />
-          </div>
-          <button onClick={()=>{_email=email;sendWebhook({event:"email_entered",step:"email",email});setShowEmail(false);}} disabled={!email} style={{width:"100%",padding:"16px",borderRadius:12,border:"none",background:email?`linear-gradient(135deg,${NV2},${NV3})`:"#cbd5e1",color:"#fff",fontSize:16,fontWeight:700,cursor:email?"pointer":"not-allowed",boxShadow:email?"0 4px 14px rgba(10,25,41,0.4)":"none",display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>Continue <span>{"\u2192"}</span></button>
-          <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:8,marginTop:18}}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" strokeWidth="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
-            <span style={{fontSize:12,color:"#94a3b8"}}>256-bit SSL encrypted {"\u00b7"} Your information is never sold</span>
-          </div>
+          <div style={{display:"flex",alignItems:"center",gap:12,padding:"14px 18px",border:"1.5px solid #dde1e7",borderRadius:12,marginBottom:24,background:"#fff"}}><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" strokeWidth="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M22 4l-10 8L2 4"/></svg><input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@yourcompany.com" onKeyDown={e=>{if(e.key==="Enter"&&email)handleEmailSubmit();}} style={{flex:1,border:"none",outline:"none",fontSize:15,fontFamily:"'Plus Jakarta Sans',sans-serif",color:"#1a202c",background:"transparent"}} /></div>
+          <button onClick={handleEmailSubmit} disabled={!email||loading} style={{width:"100%",padding:"16px",borderRadius:12,border:"none",background:email?`linear-gradient(135deg,${NV2},${NV3})`:"#cbd5e1",color:"#fff",fontSize:16,fontWeight:700,cursor:email&&!loading?"pointer":"not-allowed",boxShadow:email?"0 4px 14px rgba(10,25,41,0.4)":"none",display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>{loading?<><div style={{width:20,height:20,border:"2px solid rgba(255,255,255,0.3)",borderTopColor:"#fff",borderRadius:"50%",animation:"spin 0.7s linear infinite"}} />Looking up your application...</>:<>Continue <span>{"\u2192"}</span></>}</button>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:8,marginTop:18}}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" strokeWidth="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg><span style={{fontSize:12,color:"#94a3b8"}}>256-bit SSL encrypted {"\u00b7"} Your information is never sold</span></div>
         </div>
       </div>
     </div>
-    {/* Stats */}
-    <div style={{display:"flex",justifyContent:"center",gap:0,padding:"28px 20px 36px"}}>
-      {[{val:"$2B+",label:"FUNDED"},{val:"24hr",label:"APPROVALS"},{val:"10K+",label:"BUSINESSES FUNDED"}].map((s,i)=>(<div key={i} style={{textAlign:"center",flex:1,maxWidth:200,borderLeft:i>0?"1px solid rgba(255,255,255,0.12)":"none",padding:"0 20px"}}><p style={{margin:0,fontSize:"clamp(24px,3vw,32px)",fontWeight:800,color:"#fff"}}>{s.val}</p><p style={{margin:"4px 0 0",fontSize:10,fontWeight:600,letterSpacing:"0.1em",color:"rgba(255,255,255,0.45)",textTransform:"uppercase"}}>{s.label}</p></div>))}
-    </div>
+    <div style={{display:"flex",justifyContent:"center",gap:0,padding:"28px 20px 36px"}}>{[{val:"$2B+",label:"FUNDED"},{val:"24hr",label:"APPROVALS"},{val:"10K+",label:"BUSINESSES FUNDED"}].map((s,i)=>(<div key={i} style={{textAlign:"center",flex:1,maxWidth:200,borderLeft:i>0?"1px solid rgba(255,255,255,0.12)":"none",padding:"0 20px"}}><p style={{margin:0,fontSize:"clamp(24px,3vw,32px)",fontWeight:800,color:"#fff"}}>{s.val}</p><p style={{margin:"4px 0 0",fontSize:10,fontWeight:600,letterSpacing:"0.1em",color:"rgba(255,255,255,0.45)",textTransform:"uppercase"}}>{s.label}</p></div>))}</div>
     <AgentFooter agent={agent} />
   </div>);}
 
