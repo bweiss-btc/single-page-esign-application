@@ -1,610 +1,75 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 
-/* ───────── constants ───────── */
-const BRAND = { name: "Big Think Capital", tagline: "Business Financing" };
 const STEPS = ["Business Information", "Owner Information", "Review & Sign"];
-
-const STATE_OPTS = ["AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY"];
 const ENTITY_OPTS = ["LLC", "Corporation", "Sole Proprietorship", "Partnership", "S-Corp", "Non-Profit"];
 const PRODUCT_OPTS = ["Term Loan", "Line of Credit", "SBA Loan", "Equipment Financing", "Invoice Factoring", "Merchant Cash Advance"];
 const YES_NO = ["Yes", "No"];
+const emptyOwner = () => ({ firstName: "", lastName: "", dob: "", ssn: "", ownership: "", creditScore: "", address: "", city: "", state: "", zip: "", email: "", cell: "" });
 
-const emptyOwner = () => ({
-  firstName: "", lastName: "", dob: "", ssn: "", ownership: "",
-  creditScore: "", address: "", city: "", state: "", zip: "", email: "", cell: "",
-});
-
-/* ───────── reusable components ───────── */
 function Field({ label, value, onChange, type = "text", placeholder = "", required, half }) {
   const [focused, setFocused] = useState(false);
-  return (
-    <div style={{ flex: half ? "1 1 calc(50% - 10px)" : "1 1 100%", minWidth: half ? 140 : 0 }}>
-      <label style={{
-        display: "block", marginBottom: 5, fontSize: 12.5, fontWeight: 600,
-        color: focused ? "#0b6e7f" : "#4a5568", fontFamily: "'Plus Jakarta Sans', sans-serif",
-        letterSpacing: "0.01em", transition: "color 0.2s",
-      }}>
-        {label}{required && <span style={{ color: "#d64545", marginLeft: 2 }}>*</span>}
-      </label>
-      <input
-        type={type} value={value} placeholder={placeholder}
-        onChange={e => onChange(e.target.value)}
-        onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
-        style={{
-          width: "100%", padding: "10px 14px", border: `1.5px solid ${focused ? "#0b6e7f" : "#dde1e7"}`,
-          borderRadius: 10, fontSize: 14, fontFamily: "'Plus Jakarta Sans', sans-serif",
-          color: "#1a202c", background: focused ? "#f0fafb" : "#fff",
-          outline: "none", transition: "all 0.2s ease", boxSizing: "border-box",
-        }}
-      />
-    </div>
-  );
+  return (<div style={{ flex: half ? "1 1 calc(50% - 10px)" : "1 1 100%", minWidth: half ? 140 : 0 }}><label style={{ display: "block", marginBottom: 5, fontSize: 12.5, fontWeight: 600, color: focused ? "#0b6e7f" : "#4a5568", fontFamily: "'Plus Jakarta Sans', sans-serif", letterSpacing: "0.01em", transition: "color 0.2s" }}>{label}{required && <span style={{ color: "#d64545", marginLeft: 2 }}>*</span>}</label><input type={type} value={value} placeholder={placeholder} onChange={e => onChange(e.target.value)} onFocus={() => setFocused(true)} onBlur={() => setFocused(false)} style={{ width: "100%", padding: "10px 14px", border: `1.5px solid ${focused ? "#0b6e7f" : "#dde1e7"}`, borderRadius: 10, fontSize: 14, fontFamily: "'Plus Jakarta Sans', sans-serif", color: "#1a202c", background: focused ? "#f0fafb" : "#fff", outline: "none", transition: "all 0.2s ease", boxSizing: "border-box" }} /></div>);
 }
 
 function Select({ label, value, onChange, options, required, half, placeholder = "Select..." }) {
   const [focused, setFocused] = useState(false);
-  return (
-    <div style={{ flex: half ? "1 1 calc(50% - 10px)" : "1 1 100%", minWidth: half ? 140 : 0 }}>
-      <label style={{
-        display: "block", marginBottom: 5, fontSize: 12.5, fontWeight: 600,
-        color: focused ? "#0b6e7f" : "#4a5568", fontFamily: "'Plus Jakarta Sans', sans-serif",
-        letterSpacing: "0.01em", transition: "color 0.2s",
-      }}>
-        {label}{required && <span style={{ color: "#d64545", marginLeft: 2 }}>*</span>}
-      </label>
-      <select
-        value={value} onChange={e => onChange(e.target.value)}
-        onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
-        style={{
-          width: "100%", padding: "10px 14px", border: `1.5px solid ${focused ? "#0b6e7f" : "#dde1e7"}`,
-          borderRadius: 10, fontSize: 14, fontFamily: "'Plus Jakarta Sans', sans-serif",
-          color: value ? "#1a202c" : "#a0aec0", background: focused ? "#f0fafb" : "#fff",
-          outline: "none", transition: "all 0.2s ease", appearance: "none", cursor: "pointer",
-          boxSizing: "border-box",
-          backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23718096' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E")`,
-          backgroundRepeat: "no-repeat", backgroundPosition: "right 12px center",
-        }}
-      >
-        <option value="">{placeholder}</option>
-        {options.map(o => <option key={o} value={o}>{o}</option>)}
-      </select>
-    </div>
-  );
+  return (<div style={{ flex: half ? "1 1 calc(50% - 10px)" : "1 1 100%", minWidth: half ? 140 : 0 }}><label style={{ display: "block", marginBottom: 5, fontSize: 12.5, fontWeight: 600, color: focused ? "#0b6e7f" : "#4a5568", fontFamily: "'Plus Jakarta Sans', sans-serif" }}>{label}{required && <span style={{ color: "#d64545", marginLeft: 2 }}>*</span>}</label><select value={value} onChange={e => onChange(e.target.value)} onFocus={() => setFocused(true)} onBlur={() => setFocused(false)} style={{ width: "100%", padding: "10px 14px", border: `1.5px solid ${focused ? "#0b6e7f" : "#dde1e7"}`, borderRadius: 10, fontSize: 14, fontFamily: "'Plus Jakarta Sans', sans-serif", color: value ? "#1a202c" : "#a0aec0", background: focused ? "#f0fafb" : "#fff", outline: "none", appearance: "none", cursor: "pointer", boxSizing: "border-box" }}><option value="">{placeholder}</option>{options.map(o => <option key={o} value={o}>{o}</option>)}</select></div>);
 }
 
 function Textarea({ label, value, onChange, placeholder, required }) {
   const [focused, setFocused] = useState(false);
-  return (
-    <div style={{ flex: "1 1 100%" }}>
-      <label style={{
-        display: "block", marginBottom: 5, fontSize: 12.5, fontWeight: 600,
-        color: focused ? "#0b6e7f" : "#4a5568", fontFamily: "'Plus Jakarta Sans', sans-serif",
-      }}>
-        {label}{required && <span style={{ color: "#d64545", marginLeft: 2 }}>*</span>}
-      </label>
-      <textarea
-        value={value} placeholder={placeholder} rows={3}
-        onChange={e => onChange(e.target.value)}
-        onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
-        style={{
-          width: "100%", padding: "10px 14px", border: `1.5px solid ${focused ? "#0b6e7f" : "#dde1e7"}`,
-          borderRadius: 10, fontSize: 14, fontFamily: "'Plus Jakarta Sans', sans-serif",
-          color: "#1a202c", background: focused ? "#f0fafb" : "#fff",
-          outline: "none", transition: "all 0.2s ease", resize: "vertical",
-          boxSizing: "border-box",
-        }}
-      />
-    </div>
-  );
+  return (<div style={{ flex: "1 1 100%" }}><label style={{ display: "block", marginBottom: 5, fontSize: 12.5, fontWeight: 600, color: focused ? "#0b6e7f" : "#4a5568", fontFamily: "'Plus Jakarta Sans', sans-serif" }}>{label}{required && <span style={{ color: "#d64545", marginLeft: 2 }}>*</span>}</label><textarea value={value} placeholder={placeholder} rows={3} onChange={e => onChange(e.target.value)} onFocus={() => setFocused(true)} onBlur={() => setFocused(false)} style={{ width: "100%", padding: "10px 14px", border: `1.5px solid ${focused ? "#0b6e7f" : "#dde1e7"}`, borderRadius: 10, fontSize: 14, fontFamily: "'Plus Jakarta Sans', sans-serif", color: "#1a202c", background: focused ? "#f0fafb" : "#fff", outline: "none", resize: "vertical", boxSizing: "border-box" }} /></div>);
 }
 
-function Row({ children, gap = 20 }) {
-  return <div style={{ display: "flex", flexWrap: "wrap", gap }}>{children}</div>;
-}
+function Row({ children, gap = 20 }) { return <div style={{ display: "flex", flexWrap: "wrap", gap }}>{children}</div>; }
 
-/* ───────── step indicator ───────── */
-function StepBar({ current }) {
-  return (
-    <div style={{
-      display: "flex", alignItems: "center", justifyContent: "center",
-      padding: "24px 20px 28px", gap: 0,
-    }}>
-      {STEPS.map((label, i) => (
-        <div key={i} style={{ display: "flex", alignItems: "center", flex: i < 2 ? 1 : "none" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <div style={{
-              width: 30, height: 30, borderRadius: "50%", display: "flex",
-              alignItems: "center", justifyContent: "center",
-              fontSize: 13, fontWeight: 700, fontFamily: "'Plus Jakarta Sans', sans-serif",
-              background: i < current ? "#0b6e7f" : i === current ? "#0b6e7f" : "#e2e8f0",
-              color: i <= current ? "#fff" : "#94a3b8",
-              transition: "all 0.4s ease",
-              boxShadow: i === current ? "0 0 0 4px rgba(11,110,127,0.15)" : "none",
-            }}>
-              {i < current ? (
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>
-              ) : i + 1}
-            </div>
-            <span style={{
-              fontSize: 13, fontWeight: i === current ? 700 : 500,
-              color: i <= current ? "#0b6e7f" : "#94a3b8",
-              fontFamily: "'Plus Jakarta Sans', sans-serif",
-              whiteSpace: "nowrap", transition: "all 0.3s",
-            }}>{label}</span>
-          </div>
-          {i < 2 && (
-            <div style={{
-              flex: 1, height: 3, margin: "0 16px", borderRadius: 2,
-              background: i < current ? "#0b6e7f" : "#e2e8f0",
-              transition: "background 0.5s ease",
-            }} />
-          )}
-        </div>
-      ))}
-    </div>
-  );
-}
+function StepBar({ current }) { return (<div style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: "24px 20px 28px" }}>{STEPS.map((label, i) => (<div key={i} style={{ display: "flex", alignItems: "center", flex: i < 2 ? 1 : "none" }}><div style={{ display: "flex", alignItems: "center", gap: 10 }}><div style={{ width: 30, height: 30, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 700, background: i <= current ? "#0b6e7f" : "#e2e8f0", color: i <= current ? "#fff" : "#94a3b8", boxShadow: i === current ? "0 0 0 4px rgba(11,110,127,0.15)" : "none" }}>{i < current ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg> : i + 1}</div><span style={{ fontSize: 13, fontWeight: i === current ? 700 : 500, color: i <= current ? "#0b6e7f" : "#94a3b8", whiteSpace: "nowrap" }}>{label}</span></div>{i < 2 && <div style={{ flex: 1, height: 3, margin: "0 16px", borderRadius: 2, background: i < current ? "#0b6e7f" : "#e2e8f0" }} />}</div>))}</div>); }
 
-/* ───────── section header ───────── */
-function SectionHeader({ title, subtitle }) {
-  return (
-    <div style={{
-      background: "linear-gradient(135deg, #0a5c6b 0%, #0b6e7f 40%, #0e8a9e 100%)",
-      borderRadius: "14px 14px 0 0", padding: "22px 28px",
-      position: "relative", overflow: "hidden",
-    }}>
-      <div style={{
-        position: "absolute", top: -30, right: -30, width: 120, height: 120,
-        borderRadius: "50%", background: "rgba(255,255,255,0.06)",
-      }} />
-      <div style={{
-        position: "absolute", bottom: -20, left: 40, width: 80, height: 80,
-        borderRadius: "50%", background: "rgba(255,255,255,0.04)",
-      }} />
-      <h2 style={{
-        margin: 0, fontSize: 20, fontWeight: 800, color: "#fff",
-        fontFamily: "'Plus Jakarta Sans', sans-serif", letterSpacing: "-0.01em",
-        position: "relative",
-      }}>{title}</h2>
-      {subtitle && <p style={{
-        margin: "4px 0 0", fontSize: 13, color: "rgba(255,255,255,0.75)",
-        fontFamily: "'Plus Jakarta Sans', sans-serif", position: "relative",
-      }}>{subtitle}</p>}
-    </div>
-  );
-}
+function SectionHeader({ title, subtitle }) { return (<div style={{ background: "linear-gradient(135deg, #0a5c6b 0%, #0b6e7f 40%, #0e8a9e 100%)", borderRadius: "14px 14px 0 0", padding: "22px 28px", position: "relative", overflow: "hidden" }}><div style={{ position: "absolute", top: -30, right: -30, width: 120, height: 120, borderRadius: "50%", background: "rgba(255,255,255,0.06)" }} /><h2 style={{ margin: 0, fontSize: 20, fontWeight: 800, color: "#fff", fontFamily: "'Plus Jakarta Sans', sans-serif", position: "relative" }}>{title}</h2>{subtitle && <p style={{ margin: "4px 0 0", fontSize: 13, color: "rgba(255,255,255,0.75)", fontFamily: "'Plus Jakarta Sans', sans-serif", position: "relative" }}>{subtitle}</p>}</div>); }
 
-/* ───────── signature pad ───────── */
-function SignaturePad({ onSign }) {
-  const canvasRef = useRef(null);
-  const [drawing, setDrawing] = useState(false);
-  const [hasSig, setHasSig] = useState(false);
-
+function DocuSealEmbed({ src, email, onComplete }) {
+  const containerRef = useRef(null);
   useEffect(() => {
-    const c = canvasRef.current; if (!c) return;
-    const ctx = c.getContext("2d");
-    ctx.lineWidth = 2.5; ctx.lineCap = "round"; ctx.strokeStyle = "#1a202c";
-  }, []);
-
-  const pos = e => {
-    const r = canvasRef.current.getBoundingClientRect();
-    const cx = e.touches ? e.touches[0].clientX : e.clientX;
-    const cy = e.touches ? e.touches[0].clientY : e.clientY;
-    return { x: (cx - r.left) * (600 / r.width), y: (cy - r.top) * (200 / r.height) };
-  };
-  const start = e => { e.preventDefault(); const p = pos(e); canvasRef.current.getContext("2d").beginPath(); canvasRef.current.getContext("2d").moveTo(p.x, p.y); setDrawing(true); };
-  const move = e => { if (!drawing) return; e.preventDefault(); const p = pos(e); const ctx = canvasRef.current.getContext("2d"); ctx.lineTo(p.x, p.y); ctx.stroke(); setHasSig(true); };
-  const stop = () => { setDrawing(false); if (hasSig) onSign?.(true); };
-  const clear = () => { const c = canvasRef.current; c.getContext("2d").clearRect(0, 0, 600, 200); setHasSig(false); onSign?.(false); };
-
-  return (
-    <div>
-      <div style={{ border: "2px dashed #c8d5db", borderRadius: 12, overflow: "hidden", background: "#f8fbfc", position: "relative" }}>
-        <canvas ref={canvasRef} width={600} height={200}
-          style={{ width: "100%", height: 160, cursor: "crosshair", display: "block" }}
-          onMouseDown={start} onMouseMove={move} onMouseUp={stop} onMouseLeave={stop}
-          onTouchStart={start} onTouchMove={move} onTouchEnd={stop}
-        />
-        {!hasSig && <div style={{
-          position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)",
-          color: "#a0b4bd", fontStyle: "italic", fontSize: 16, pointerEvents: "none",
-          fontFamily: "'Plus Jakarta Sans', sans-serif",
-        }}>Draw your signature here</div>}
-        <div style={{ position: "absolute", bottom: 20, left: 24, right: 24, height: 1, background: "#c8d5db", pointerEvents: "none" }} />
-      </div>
-      {hasSig && <button onClick={clear} style={{
-        marginTop: 6, background: "none", border: "none", color: "#0b6e7f", fontSize: 13,
-        fontWeight: 600, cursor: "pointer", fontFamily: "'Plus Jakarta Sans', sans-serif",
-      }}>Clear signature</button>}
-    </div>
-  );
+    const script = document.createElement("script");
+    script.src = "https://cdn.docuseal.com/js/form.js";
+    script.async = true;
+    document.head.appendChild(script);
+    script.onload = () => { if (containerRef.current) { containerRef.current.innerHTML = ""; const form = document.createElement("docuseal-form"); form.setAttribute("data-src", src); if (email) form.setAttribute("data-email", email); form.setAttribute("data-expand", "true"); form.addEventListener("completed", (e) => { onComplete?.(e.detail); }); containerRef.current.appendChild(form); } };
+    return () => { document.head.removeChild(script); };
+  }, [src, email, onComplete]);
+  return <div ref={containerRef} style={{ minHeight: 400 }} />;
 }
 
-/* ═══════════════════ MAIN APP ═══════════════════ */
 export default function App() {
   const [showEmail, setShowEmail] = useState(true);
   const [email, setEmail] = useState("");
   const [step, setStep] = useState(0);
   const [anim, setAnim] = useState(false);
   const [dir, setDir] = useState(1);
-  const [signed, setSigned] = useState(false);
+  const [docusealSrc, setDocusealSrc] = useState(null);
+  const [docusealLoading, setDocusealLoading] = useState(false);
+  const [docusealError, setDocusealError] = useState(null);
   const [submitted, setSubmitted] = useState(false);
-
-  const [biz, setBiz] = useState({
-    name: "", dba: "", startDate: "", entity: "", industry: "", taxId: "",
-    description: "", amountRequested: "", annualRevenue: "", useOfProceeds: "",
-    product: "", address: "", city: "", state: "", zip: "", website: "",
-    phone: "", ownRealEstate: "", openLoans: "",
-  });
-
+  const [biz, setBiz] = useState({ name: "", dba: "", startDate: "", entity: "", industry: "", taxId: "", description: "", amountRequested: "", annualRevenue: "", useOfProceeds: "", product: "", address: "", city: "", state: "", zip: "", website: "", phone: "", ownRealEstate: "", openLoans: "" });
   const [owners, setOwners] = useState([emptyOwner()]);
-
   const upBiz = (k, v) => setBiz(p => ({ ...p, [k]: v }));
   const upOwner = (idx, k, v) => setOwners(p => p.map((o, i) => i === idx ? { ...o, [k]: v } : o));
+  const goTo = n => { if (n === step || anim) return; setDir(n > step ? 1 : -1); setAnim(true); setTimeout(() => { setStep(n); setTimeout(() => setAnim(false), 50); }, 220); };
+  const initDocuSeal = useCallback(async () => {
+    setDocusealLoading(true); setDocusealError(null);
+    try { const res = await fetch("/api/create-submission", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ business: biz, owners, email }) }); const data = await res.json(); if (!res.ok) throw new Error(data.error || "Failed to create signing document"); setDocusealSrc(data.src); } catch (err) { setDocusealError(err.message); } finally { setDocusealLoading(false); }
+  }, [biz, owners, email]);
+  const handleDocuSealComplete = useCallback(() => { setSubmitted(true); }, []);
+  const slideStyle = { opacity: anim ? 0 : 1, transform: anim ? `translateY(${dir * 24}px)` : "translateY(0)", transition: "all 0.35s cubic-bezier(0.4,0,0.2,1)" };
 
-  const goTo = n => {
-    if (n === step || anim) return;
-    setDir(n > step ? 1 : -1); setAnim(true);
-    setTimeout(() => { setStep(n); setTimeout(() => setAnim(false), 50); }, 220);
-  };
+  if (showEmail) { return (<div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "linear-gradient(160deg, #1a1a2e 0%, #16213e 40%, #0f3460 100%)", fontFamily: "'Plus Jakarta Sans', sans-serif", padding: 20 }}><link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" /><div style={{ width: "100%", maxWidth: 440, borderRadius: 20, overflow: "hidden", boxShadow: "0 25px 60px rgba(0,0,0,0.35)", animation: "modalIn 0.5s cubic-bezier(0.4,0,0.2,1)" }}><style>{`@keyframes modalIn { from { opacity:0; transform:translateY(30px) scale(0.97); } to { opacity:1; transform:translateY(0) scale(1); } }`}</style><div style={{ background: "linear-gradient(135deg, #0a5c6b, #0b6e7f, #0e8a9e)", padding: "32px 32px 28px", position: "relative", overflow: "hidden" }}><div style={{ position: "absolute", top: -40, right: -40, width: 140, height: 140, borderRadius: "50%", background: "rgba(255,255,255,0.06)" }} /><div style={{ display: "flex", alignItems: "center", gap: 14, position: "relative" }}><div style={{ width: 44, height: 44, borderRadius: 12, background: "rgba(255,255,255,0.15)", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 20, fontWeight: 800, border: "1px solid rgba(255,255,255,0.2)" }}>B</div><div><div style={{ color: "#fff", fontSize: 19, fontWeight: 800 }}>Big Think Capital</div><div style={{ color: "rgba(255,255,255,0.65)", fontSize: 13 }}>Business Financing</div></div></div></div><div style={{ background: "#fff", padding: "32px 32px 28px" }}><h2 style={{ margin: "0 0 6px", fontSize: 24, fontWeight: 800, color: "#1a202c" }}>Welcome Back</h2><p style={{ margin: "0 0 24px", fontSize: 14.5, color: "#64748b", lineHeight: 1.6 }}>Enter your email to retrieve your saved application or start a new one.</p><Field label="Email Address" value={email} onChange={setEmail} type="email" placeholder="you@company.com" required /><div style={{ marginTop: 8 }} /><button onClick={() => setShowEmail(false)} style={{ width: "100%", padding: "13px", borderRadius: 12, border: "none", background: "linear-gradient(135deg, #0a5c6b, #0b6e7f)", color: "#fff", fontSize: 15, fontWeight: 700, cursor: "pointer", boxShadow: "0 4px 14px rgba(11,110,127,0.3)" }}>Continue</button><div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 16 }}><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" strokeWidth="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg><span style={{ fontSize: 12, color: "#94a3b8" }}>Your information is encrypted and secure</span></div></div></div></div>); }
 
-  const slideStyle = {
-    opacity: anim ? 0 : 1,
-    transform: anim ? `translateY(${dir * 24}px)` : "translateY(0)",
-    transition: "all 0.35s cubic-bezier(0.4,0,0.2,1)",
-  };
+  if (submitted) { return (<div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#f1f5f9", fontFamily: "'Plus Jakarta Sans', sans-serif", padding: 20 }}><link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" /><style>{`@keyframes modalIn { from { opacity:0; transform:translateY(30px) scale(0.97); } to { opacity:1; transform:translateY(0) scale(1); } }`}</style><div style={{ textAlign: "center", maxWidth: 440, animation: "modalIn 0.5s ease" }}><div style={{ width: 72, height: 72, borderRadius: "50%", margin: "0 auto 20px", background: "linear-gradient(135deg, #0a5c6b, #0e8a9e)", display: "flex", alignItems: "center", justifyContent: "center" }}><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg></div><h2 style={{ fontSize: 28, fontWeight: 800, color: "#1a202c", margin: "0 0 8px" }}>Application Submitted!</h2><p style={{ fontSize: 15, color: "#64748b", lineHeight: 1.7 }}>Thank you. A signed copy has been sent to <strong>{email}</strong>. Our team will reach out within 24 hours.</p></div></div>); }
 
-  /* ───── email modal ───── */
-  if (showEmail) {
-    return (
-      <div style={{
-        minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center",
-        background: "linear-gradient(160deg, #1a1a2e 0%, #16213e 40%, #0f3460 100%)",
-        fontFamily: "'Plus Jakarta Sans', sans-serif", padding: 20,
-      }}>
-        <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-        <div style={{
-          width: "100%", maxWidth: 440, borderRadius: 20, overflow: "hidden",
-          boxShadow: "0 25px 60px rgba(0,0,0,0.35)", animation: "modalIn 0.5s cubic-bezier(0.4,0,0.2,1)",
-        }}>
-          <style>{`
-            @keyframes modalIn { from { opacity:0; transform:translateY(30px) scale(0.97); } to { opacity:1; transform:translateY(0) scale(1); } }
-          `}</style>
-          {/* header */}
-          <div style={{
-            background: "linear-gradient(135deg, #0a5c6b, #0b6e7f, #0e8a9e)",
-            padding: "32px 32px 28px", position: "relative", overflow: "hidden",
-          }}>
-            <div style={{ position: "absolute", top: -40, right: -40, width: 140, height: 140, borderRadius: "50%", background: "rgba(255,255,255,0.06)" }} />
-            <div style={{ display: "flex", alignItems: "center", gap: 14, position: "relative" }}>
-              <div style={{
-                width: 44, height: 44, borderRadius: 12, background: "rgba(255,255,255,0.15)",
-                backdropFilter: "blur(10px)", display: "flex", alignItems: "center", justifyContent: "center",
-                color: "#fff", fontSize: 20, fontWeight: 800, border: "1px solid rgba(255,255,255,0.2)",
-              }}>B</div>
-              <div>
-                <div style={{ color: "#fff", fontSize: 19, fontWeight: 800, letterSpacing: "-0.01em" }}>Big Think Capital</div>
-                <div style={{ color: "rgba(255,255,255,0.65)", fontSize: 13, fontWeight: 500 }}>Business Financing</div>
-              </div>
-            </div>
-          </div>
-          {/* body */}
-          <div style={{ background: "#fff", padding: "32px 32px 28px" }}>
-            <h2 style={{ margin: "0 0 6px", fontSize: 24, fontWeight: 800, color: "#1a202c", fontFamily: "'Plus Jakarta Sans', sans-serif" }}>Welcome Back</h2>
-            <p style={{ margin: "0 0 24px", fontSize: 14.5, color: "#64748b", lineHeight: 1.6, fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
-              Enter your email to retrieve your saved application or start a new one.
-            </p>
-            <Field label="Email Address" value={email} onChange={setEmail} type="email" placeholder="you@company.com" required />
-            <div style={{ marginTop: 8 }} />
-            <button onClick={() => setShowEmail(false)} style={{
-              width: "100%", padding: "13px", borderRadius: 12, border: "none",
-              background: "linear-gradient(135deg, #0a5c6b, #0b6e7f)",
-              color: "#fff", fontSize: 15, fontWeight: 700, cursor: "pointer",
-              fontFamily: "'Plus Jakarta Sans', sans-serif",
-              boxShadow: "0 4px 14px rgba(11,110,127,0.3)",
-              transition: "all 0.25s ease",
-            }}>Continue</button>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 16 }}>
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" strokeWidth="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
-              <span style={{ fontSize: 12, color: "#94a3b8", fontFamily: "'Plus Jakarta Sans', sans-serif" }}>Your information is encrypted and secure</span>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  /* ───── submitted state ───── */
-  if (submitted) {
-    return (
-      <div style={{
-        minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center",
-        background: "#f1f5f9", fontFamily: "'Plus Jakarta Sans', sans-serif", padding: 20,
-      }}>
-        <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-        <style>{`@keyframes modalIn { from { opacity:0; transform:translateY(30px) scale(0.97); } to { opacity:1; transform:translateY(0) scale(1); } }`}</style>
-        <div style={{ textAlign: "center", maxWidth: 440, animation: "modalIn 0.5s ease" }}>
-          <div style={{
-            width: 72, height: 72, borderRadius: "50%", margin: "0 auto 20px",
-            background: "linear-gradient(135deg, #0a5c6b, #0e8a9e)",
-            display: "flex", alignItems: "center", justifyContent: "center",
-          }}>
-            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
-          </div>
-          <h2 style={{ fontSize: 28, fontWeight: 800, color: "#1a202c", margin: "0 0 8px" }}>Application Submitted!</h2>
-          <p style={{ fontSize: 15, color: "#64748b", lineHeight: 1.7 }}>
-            Thank you for your application. A signed copy has been sent to <strong>{email}</strong>. Our team will review and reach out within 24 hours.
-          </p>
-        </div>
-      </div>
-    );
-  }
-
-  /* ═══════════ MAIN FORM ═══════════ */
-  return (
-    <div style={{
-      minHeight: "100vh", background: "#f1f5f9",
-      fontFamily: "'Plus Jakarta Sans', sans-serif", paddingBottom: 40,
-    }}>
-      <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-      <style>{`@keyframes modalIn { from { opacity:0; transform:translateY(30px) scale(0.97); } to { opacity:1; transform:translateY(0) scale(1); } }`}</style>
-
-      {/* top bar */}
-      <div style={{
-        background: "#fff", borderBottom: "1px solid #e2e8f0",
-        padding: "14px 28px", display: "flex", alignItems: "center", gap: 12,
-        boxShadow: "0 1px 3px rgba(0,0,0,0.04)",
-      }}>
-        <div style={{
-          width: 36, height: 36, borderRadius: 10,
-          background: "linear-gradient(135deg, #0a5c6b, #0b6e7f)",
-          display: "flex", alignItems: "center", justifyContent: "center",
-          color: "#fff", fontSize: 16, fontWeight: 800,
-        }}>B</div>
-        <div>
-          <div style={{ fontSize: 16, fontWeight: 800, color: "#1a202c", letterSpacing: "-0.01em" }}>Big Think Capital</div>
-          <div style={{ fontSize: 11.5, color: "#94a3b8", fontWeight: 500 }}>Business Financing Application</div>
-        </div>
-      </div>
-
-      <div style={{ maxWidth: 680, margin: "0 auto", padding: "0 20px" }}>
-        <StepBar current={step} />
-
-        {/* card */}
-        <div style={{
-          background: "#fff", borderRadius: 16, overflow: "hidden",
-          boxShadow: "0 1px 3px rgba(0,0,0,0.05), 0 8px 30px rgba(0,0,0,0.06)",
-          marginBottom: 20,
-        }}>
-
-          {/* ═══ STEP 0: Business Info ═══ */}
-          {step === 0 && (
-            <div style={slideStyle}>
-              <SectionHeader title="Business Information" subtitle="Tell us about your business" />
-              <div style={{ padding: "24px 28px 28px", display: "flex", flexDirection: "column", gap: 18 }}>
-                <Row><Field label="Business Name" value={biz.name} onChange={v => upBiz("name", v)} placeholder="Acme Corporation" required /></Row>
-                <Row><Field label="DBA Name" value={biz.dba} onChange={v => upBiz("dba", v)} placeholder="Acme Co" /></Row>
-                <Row>
-                  <Field label="Business Start Date" value={biz.startDate} onChange={v => upBiz("startDate", v)} type="date" half required />
-                  <Select label="Legal Entity" value={biz.entity} onChange={v => upBiz("entity", v)} options={ENTITY_OPTS} half required />
-                </Row>
-                <Row>
-                  <Field label="Industry" value={biz.industry} onChange={v => upBiz("industry", v)} placeholder="Technology" half required />
-                  <Field label="Federal Tax ID" value={biz.taxId} onChange={v => upBiz("taxId", v)} placeholder="12-3456789" half required />
-                </Row>
-                <Row><Textarea label="Description of Business" value={biz.description} onChange={v => upBiz("description", v)} placeholder="Briefly describe your business operations..." required /></Row>
-                <Row>
-                  <Field label="Amount Requested" value={biz.amountRequested} onChange={v => upBiz("amountRequested", v)} placeholder="$250,000" half required />
-                  <Field label="Annual Revenue" value={biz.annualRevenue} onChange={v => upBiz("annualRevenue", v)} placeholder="$1,500,000" half required />
-                </Row>
-                <Row><Field label="Use of Proceeds" value={biz.useOfProceeds} onChange={v => upBiz("useOfProceeds", v)} placeholder="Business expansion and equipment purchase" required /></Row>
-                <Row><Select label="Which Product Are You Interested In?" value={biz.product} onChange={v => upBiz("product", v)} options={PRODUCT_OPTS} required /></Row>
-                <Row><Field label="Business Address" value={biz.address} onChange={v => upBiz("address", v)} placeholder="123 Main Street" required /></Row>
-                <Row>
-                  <Field label="City" value={biz.city} onChange={v => upBiz("city", v)} placeholder="San Francisco" half required />
-                  <Field label="State" value={biz.state} onChange={v => upBiz("state", v)} placeholder="CA" half required />
-                </Row>
-                <Row>
-                  <Field label="ZIP" value={biz.zip} onChange={v => upBiz("zip", v)} placeholder="94102" half required />
-                  <Field label="Website" value={biz.website} onChange={v => upBiz("website", v)} placeholder="https://acmecorp.com" half />
-                </Row>
-                <Row>
-                  <Field label="Phone Number" value={biz.phone} onChange={v => upBiz("phone", v)} placeholder="415-555-0100" type="tel" half required />
-                  <Select label="Do You Own Real Estate?" value={biz.ownRealEstate} onChange={v => upBiz("ownRealEstate", v)} options={YES_NO} half />
-                </Row>
-                <Row><Select label="Do You Have Open Business Loans?" value={biz.openLoans} onChange={v => upBiz("openLoans", v)} options={YES_NO} /></Row>
-              </div>
-            </div>
-          )}
-
-          {/* ═══ STEP 1: Owner Info ═══ */}
-          {step === 1 && (
-            <div style={slideStyle}>
-              <SectionHeader title="Owner Information" subtitle="Provide details for all business owners" />
-              <div style={{ padding: "24px 28px 28px" }}>
-                {owners.map((o, idx) => (
-                  <div key={idx} style={{ marginBottom: idx < owners.length - 1 ? 28 : 0 }}>
-                    <div style={{
-                      display: "flex", alignItems: "center", justifyContent: "space-between",
-                      marginBottom: 18,
-                    }}>
-                      <div style={{
-                        fontSize: 15, fontWeight: 700, color: "#1a202c",
-                        display: "flex", alignItems: "center", gap: 8,
-                      }}>
-                        <div style={{
-                          width: 24, height: 24, borderRadius: "50%",
-                          background: "#e6f3f5", color: "#0b6e7f",
-                          display: "flex", alignItems: "center", justifyContent: "center",
-                          fontSize: 12, fontWeight: 800,
-                        }}>{idx + 1}</div>
-                        {idx === 0 ? "Primary Owner" : `Owner ${idx + 1}`}
-                      </div>
-                      {idx > 0 && (
-                        <button onClick={() => setOwners(p => p.filter((_, i) => i !== idx))} style={{
-                          background: "none", border: "none", color: "#d64545", fontSize: 12.5,
-                          fontWeight: 600, cursor: "pointer", fontFamily: "'Plus Jakarta Sans', sans-serif",
-                        }}>Remove</button>
-                      )}
-                    </div>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-                      <Row>
-                        <Field label="First Name" value={o.firstName} onChange={v => upOwner(idx, "firstName", v)} placeholder="John" half required />
-                        <Field label="Last Name" value={o.lastName} onChange={v => upOwner(idx, "lastName", v)} placeholder="Smith" half required />
-                      </Row>
-                      <Row>
-                        <Field label="Date of Birth" value={o.dob} onChange={v => upOwner(idx, "dob", v)} type="date" half required />
-                        <Field label="SSN" value={o.ssn} onChange={v => upOwner(idx, "ssn", v)} placeholder="XXX-XX-XXXX" half required />
-                      </Row>
-                      <Row>
-                        <Field label="% Ownership" value={o.ownership} onChange={v => upOwner(idx, "ownership", v)} placeholder="60" half required />
-                        <Field label="Credit Score" value={o.creditScore} onChange={v => upOwner(idx, "creditScore", v)} placeholder="720" half />
-                      </Row>
-                      <Row><Field label="Address" value={o.address} onChange={v => upOwner(idx, "address", v)} placeholder="456 Oak Avenue" required /></Row>
-                      <Row>
-                        <Field label="City" value={o.city} onChange={v => upOwner(idx, "city", v)} placeholder="San Francisco" half required />
-                        <Field label="State" value={o.state} onChange={v => upOwner(idx, "state", v)} placeholder="CA" half required />
-                      </Row>
-                      <Row>
-                        <Field label="ZIP" value={o.zip} onChange={v => upOwner(idx, "zip", v)} placeholder="94102" half required />
-                        <Field label="Email" value={o.email} onChange={v => upOwner(idx, "email", v)} type="email" placeholder="john@acmecorp.com" half required />
-                      </Row>
-                      <Row><Field label="Cell" value={o.cell} onChange={v => upOwner(idx, "cell", v)} type="tel" placeholder="415-555-0101" /></Row>
-                    </div>
-                    {idx < owners.length - 1 && <div style={{ borderBottom: "1px dashed #e2e8f0", margin: "28px 0" }} />}
-                  </div>
-                ))}
-
-                {/* add owner */}
-                <button
-                  onClick={() => setOwners(p => [...p, emptyOwner()])}
-                  style={{
-                    width: "100%", marginTop: 24, padding: "14px",
-                    border: "2px dashed #c8d5db", borderRadius: 12,
-                    background: "#f8fbfc", color: "#0b6e7f",
-                    fontSize: 14, fontWeight: 700, cursor: "pointer",
-                    fontFamily: "'Plus Jakarta Sans', sans-serif",
-                    display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
-                    transition: "all 0.2s ease",
-                  }}
-                  onMouseEnter={e => { e.currentTarget.style.background = "#e6f3f5"; e.currentTarget.style.borderColor = "#0b6e7f"; }}
-                  onMouseLeave={e => { e.currentTarget.style.background = "#f8fbfc"; e.currentTarget.style.borderColor = "#c8d5db"; }}
-                >
-                  <span style={{ fontSize: 18 }}>+</span> Add a Second Owner
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* ═══ STEP 2: Review & Sign ═══ */}
-          {step === 2 && (
-            <div style={slideStyle}>
-              <SectionHeader title="Review & Sign" subtitle="Verify your information and authorize" />
-              <div style={{ padding: "24px 28px 28px" }}>
-                {/* business summary */}
-                <div style={{
-                  background: "#f8fbfc", border: "1px solid #e2eff2", borderRadius: 12,
-                  padding: "20px 24px", marginBottom: 16,
-                }}>
-                  <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "#0b6e7f", marginBottom: 10 }}>Business Details</div>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 24px", fontSize: 13.5, color: "#334155" }}>
-                    <div><span style={{ color: "#94a3b8" }}>Name:</span> {biz.name || "—"}</div>
-                    <div><span style={{ color: "#94a3b8" }}>Entity:</span> {biz.entity || "—"}</div>
-                    <div><span style={{ color: "#94a3b8" }}>Industry:</span> {biz.industry || "—"}</div>
-                    <div><span style={{ color: "#94a3b8" }}>Tax ID:</span> {biz.taxId || "—"}</div>
-                    <div><span style={{ color: "#94a3b8" }}>Requested:</span> {biz.amountRequested || "—"}</div>
-                    <div><span style={{ color: "#94a3b8" }}>Revenue:</span> {biz.annualRevenue || "—"}</div>
-                    <div><span style={{ color: "#94a3b8" }}>Product:</span> {biz.product || "—"}</div>
-                    <div><span style={{ color: "#94a3b8" }}>Phone:</span> {biz.phone || "—"}</div>
-                    <div style={{ gridColumn: "1/-1" }}><span style={{ color: "#94a3b8" }}>Address:</span> {[biz.address, biz.city, biz.state, biz.zip].filter(Boolean).join(", ") || "—"}</div>
-                  </div>
-                </div>
-
-                {/* owner summaries */}
-                {owners.map((o, idx) => (
-                  <div key={idx} style={{
-                    background: "#f8fbfc", border: "1px solid #e2eff2", borderRadius: 12,
-                    padding: "20px 24px", marginBottom: 16,
-                  }}>
-                    <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "#0b6e7f", marginBottom: 10 }}>
-                      {idx === 0 ? "Primary Owner" : `Owner ${idx + 1}`}
-                    </div>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 24px", fontSize: 13.5, color: "#334155" }}>
-                      <div><span style={{ color: "#94a3b8" }}>Name:</span> {[o.firstName, o.lastName].filter(Boolean).join(" ") || "—"}</div>
-                      <div><span style={{ color: "#94a3b8" }}>Ownership:</span> {o.ownership ? `${o.ownership}%` : "—"}</div>
-                      <div><span style={{ color: "#94a3b8" }}>SSN:</span> {o.ssn ? "•••-••-" + o.ssn.slice(-4) : "—"}</div>
-                      <div><span style={{ color: "#94a3b8" }}>Credit:</span> {o.creditScore || "—"}</div>
-                      <div><span style={{ color: "#94a3b8" }}>Email:</span> {o.email || "—"}</div>
-                      <div><span style={{ color: "#94a3b8" }}>Phone:</span> {o.cell || "—"}</div>
-                    </div>
-                  </div>
-                ))}
-
-                {/* agreement */}
-                <div style={{
-                  background: "#fffbeb", borderRadius: 10, padding: "14px 18px",
-                  borderLeft: "3px solid #f59e0b", marginBottom: 24,
-                }}>
-                  <p style={{ margin: 0, fontSize: 13, color: "#78716c", lineHeight: 1.7 }}>
-                    By signing below, I certify all information is accurate and authorize Big Think Capital to verify the details provided, pull credit reports, and process this application. I understand misrepresentation may result in application denial.
-                  </p>
-                </div>
-
-                <div style={{ fontSize: 12.5, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: "#1a202c", marginBottom: 10 }}>
-                  Your Signature
-                </div>
-                <SignaturePad onSign={setSigned} />
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* nav buttons */}
-        <div style={{
-          display: "flex", justifyContent: "space-between", alignItems: "center",
-          padding: "0 4px",
-        }}>
-          {step > 0 ? (
-            <button onClick={() => goTo(step - 1)} style={{
-              padding: "12px 28px", borderRadius: 12, border: "1.5px solid #cbd5e1",
-              background: "#fff", color: "#475569", fontSize: 14, fontWeight: 700,
-              cursor: "pointer", fontFamily: "'Plus Jakarta Sans', sans-serif",
-              transition: "all 0.2s", display: "flex", alignItems: "center", gap: 6,
-            }}
-              onMouseEnter={e => { e.currentTarget.style.borderColor = "#0b6e7f"; e.currentTarget.style.color = "#0b6e7f"; }}
-              onMouseLeave={e => { e.currentTarget.style.borderColor = "#cbd5e1"; e.currentTarget.style.color = "#475569"; }}
-            >← Back</button>
-          ) : <div />}
-          <button
-            onClick={() => { if (step === 2) setSubmitted(true); else goTo(step + 1); }}
-            disabled={step === 2 && !signed}
-            style={{
-              padding: "12px 32px", borderRadius: 12, border: "none",
-              background: step === 2 && !signed ? "#cbd5e1" : "linear-gradient(135deg, #0a5c6b, #0b6e7f)",
-              color: "#fff", fontSize: 14, fontWeight: 700,
-              cursor: step === 2 && !signed ? "not-allowed" : "pointer",
-              fontFamily: "'Plus Jakarta Sans', sans-serif",
-              boxShadow: step === 2 && !signed ? "none" : "0 4px 14px rgba(11,110,127,0.25)",
-              transition: "all 0.25s", display: "flex", alignItems: "center", gap: 6,
-            }}
-          >
-            {step === 0 ? "Continue to Owner Information" : step === 1 ? "Continue to Signature" : "Submit Application"} →
-          </button>
-        </div>
-
-        {/* footer */}
-        <div style={{
-          textAlign: "center", marginTop: 28, paddingTop: 20,
-          borderTop: "1px solid #e2e8f0",
-        }}>
-          <p style={{ margin: "0 0 4px", fontSize: 13, color: "#64748b" }}>
-            Questions? Call us at <strong style={{ color: "#0b6e7f" }}>844-200-7200</strong> or visit <strong style={{ color: "#0b6e7f" }}>bigthinkcapital.com</strong>
-          </p>
-          <p style={{ margin: 0, fontSize: 11.5, color: "#94a3b8" }}>
-            © 2026 Big Think Capital. All information is encrypted and secure.
-          </p>
-        </div>
-      </div>
-    </div>
-  );
+  return (<div style={{ minHeight: "100vh", background: "#f1f5f9", fontFamily: "'Plus Jakarta Sans', sans-serif", paddingBottom: 40 }}><link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" /><style>{`@keyframes modalIn { from { opacity:0; transform:translateY(30px) scale(0.97); } to { opacity:1; transform:translateY(0) scale(1); } } @keyframes spin { to { transform: rotate(360deg); } }`}</style><div style={{ background: "#fff", borderBottom: "1px solid #e2e8f0", padding: "14px 28px", display: "flex", alignItems: "center", gap: 12, boxShadow: "0 1px 3px rgba(0,0,0,0.04)" }}><div style={{ width: 36, height: 36, borderRadius: 10, background: "linear-gradient(135deg, #0a5c6b, #0b6e7f)", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 16, fontWeight: 800 }}>B</div><div><div style={{ fontSize: 16, fontWeight: 800, color: "#1a202c" }}>Big Think Capital</div><div style={{ fontSize: 11.5, color: "#94a3b8", fontWeight: 500 }}>Business Financing Application</div></div></div>
+    <div style={{ maxWidth: 680, margin: "0 auto", padding: "0 20px" }}><StepBar current={step} /><div style={{ background: "#fff", borderRadius: 16, overflow: "hidden", boxShadow: "0 1px 3px rgba(0,0,0,0.05), 0 8px 30px rgba(0,0,0,0.06)", marginBottom: 20 }}>
+      {step === 0 && (<div style={slideStyle}><SectionHeader title="Business Information" subtitle="Tell us about your business" /><div style={{ padding: "24px 28px 28px", display: "flex", flexDirection: "column", gap: 18 }}><Row><Field label="Business Name" value={biz.name} onChange={v => upBiz("name", v)} placeholder="Acme Corporation" required /></Row><Row><Field label="DBA Name" value={biz.dba} onChange={v => upBiz("dba", v)} placeholder="Acme Co" /></Row><Row><Field label="Business Start Date" value={biz.startDate} onChange={v => upBiz("startDate", v)} type="date" half required /><Select label="Legal Entity" value={biz.entity} onChange={v => upBiz("entity", v)} options={ENTITY_OPTS} half required /></Row><Row><Field label="Industry" value={biz.industry} onChange={v => upBiz("industry", v)} placeholder="Technology" half required /><Field label="Federal Tax ID" value={biz.taxId} onChange={v => upBiz("taxId", v)} placeholder="12-3456789" half required /></Row><Row><Textarea label="Description of Business" value={biz.description} onChange={v => upBiz("description", v)} placeholder="Briefly describe your business operations..." required /></Row><Row><Field label="Amount Requested" value={biz.amountRequested} onChange={v => upBiz("amountRequested", v)} placeholder="$250,000" half required /><Field label="Annual Revenue" value={biz.annualRevenue} onChange={v => upBiz("annualRevenue", v)} placeholder="$1,500,000" half required /></Row><Row><Field label="Use of Proceeds" value={biz.useOfProceeds} onChange={v => upBiz("useOfProceeds", v)} placeholder="Business expansion and equipment purchase" required /></Row><Row><Select label="Which Product Are You Interested In?" value={biz.product} onChange={v => upBiz("product", v)} options={PRODUCT_OPTS} required /></Row><Row><Field label="Business Address" value={biz.address} onChange={v => upBiz("address", v)} placeholder="123 Main Street" required /></Row><Row><Field label="City" value={biz.city} onChange={v => upBiz("city", v)} placeholder="San Francisco" half required /><Field label="State" value={biz.state} onChange={v => upBiz("state", v)} placeholder="CA" half required /></Row><Row><Field label="ZIP" value={biz.zip} onChange={v => upBiz("zip", v)} placeholder="94102" half required /><Field label="Website" value={biz.website} onChange={v => upBiz("website", v)} placeholder="https://acmecorp.com" half /></Row><Row><Field label="Phone Number" value={biz.phone} onChange={v => upBiz("phone", v)} placeholder="415-555-0100" type="tel" half required /><Select label="Do You Own Real Estate?" value={biz.ownRealEstate} onChange={v => upBiz("ownRealEstate", v)} options={YES_NO} half /></Row><Row><Select label="Do You Have Open Business Loans?" value={biz.openLoans} onChange={v => upBiz("openLoans", v)} options={YES_NO} /></Row></div></div>)}
+      {step === 1 && (<div style={slideStyle}><SectionHeader title="Owner Information" subtitle="Provide details for all business owners" /><div style={{ padding: "24px 28px 28px" }}>{owners.map((o, idx) => (<div key={idx} style={{ marginBottom: idx < owners.length - 1 ? 28 : 0 }}><div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 18 }}><div style={{ fontSize: 15, fontWeight: 700, color: "#1a202c", display: "flex", alignItems: "center", gap: 8 }}><div style={{ width: 24, height: 24, borderRadius: "50%", background: "#e6f3f5", color: "#0b6e7f", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 800 }}>{idx + 1}</div>{idx === 0 ? "Primary Owner" : `Owner ${idx + 1}`}</div>{idx > 0 && <button onClick={() => setOwners(p => p.filter((_, i) => i !== idx))} style={{ background: "none", border: "none", color: "#d64545", fontSize: 12.5, fontWeight: 600, cursor: "pointer" }}>Remove</button>}</div><div style={{ display: "flex", flexDirection: "column", gap: 18 }}><Row><Field label="First Name" value={o.firstName} onChange={v => upOwner(idx, "firstName", v)} placeholder="John" half required /><Field label="Last Name" value={o.lastName} onChange={v => upOwner(idx, "lastName", v)} placeholder="Smith" half required /></Row><Row><Field label="Date of Birth" value={o.dob} onChange={v => upOwner(idx, "dob", v)} type="date" half required /><Field label="SSN" value={o.ssn} onChange={v => upOwner(idx, "ssn", v)} placeholder="XXX-XX-XXXX" half required /></Row><Row><Field label="% Ownership" value={o.ownership} onChange={v => upOwner(idx, "ownership", v)} placeholder="60" half required /><Field label="Credit Score" value={o.creditScore} onChange={v => upOwner(idx, "creditScore", v)} placeholder="720" half /></Row><Row><Field label="Address" value={o.address} onChange={v => upOwner(idx, "address", v)} placeholder="456 Oak Avenue" required /></Row><Row><Field label="City" value={o.city} onChange={v => upOwner(idx, "city", v)} placeholder="San Francisco" half required /><Field label="State" value={o.state} onChange={v => upOwner(idx, "state", v)} placeholder="CA" half required /></Row><Row><Field label="ZIP" value={o.zip} onChange={v => upOwner(idx, "zip", v)} placeholder="94102" half required /><Field label="Email" value={o.email} onChange={v => upOwner(idx, "email", v)} type="email" placeholder="john@acmecorp.com" half required /></Row><Row><Field label="Cell" value={o.cell} onChange={v => upOwner(idx, "cell", v)} type="tel" placeholder="415-555-0101" /></Row></div>{idx < owners.length - 1 && <div style={{ borderBottom: "1px dashed #e2e8f0", margin: "28px 0" }} />}</div>))}<button onClick={() => setOwners(p => [...p, emptyOwner()])} style={{ width: "100%", marginTop: 24, padding: "14px", border: "2px dashed #c8d5db", borderRadius: 12, background: "#f8fbfc", color: "#0b6e7f", fontSize: 14, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}><span style={{ fontSize: 18 }}>+</span> Add a Second Owner</button></div></div>)}
+      {step === 2 && (<div style={slideStyle}><SectionHeader title="Review & Sign" subtitle="Review your information and sign the application" /><div style={{ padding: "24px 28px 28px" }}><div style={{ background: "#f8fbfc", border: "1px solid #e2eff2", borderRadius: 12, padding: "20px 24px", marginBottom: 16 }}><div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "#0b6e7f", marginBottom: 10 }}>Business Details</div><div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 24px", fontSize: 13.5, color: "#334155" }}><div><span style={{ color: "#94a3b8" }}>Name:</span> {biz.name || "\u2014"}</div><div><span style={{ color: "#94a3b8" }}>Entity:</span> {biz.entity || "\u2014"}</div><div><span style={{ color: "#94a3b8" }}>Industry:</span> {biz.industry || "\u2014"}</div><div><span style={{ color: "#94a3b8" }}>Tax ID:</span> {biz.taxId || "\u2014"}</div><div><span style={{ color: "#94a3b8" }}>Requested:</span> {biz.amountRequested || "\u2014"}</div><div><span style={{ color: "#94a3b8" }}>Revenue:</span> {biz.annualRevenue || "\u2014"}</div><div><span style={{ color: "#94a3b8" }}>Product:</span> {biz.product || "\u2014"}</div><div><span style={{ color: "#94a3b8" }}>Phone:</span> {biz.phone || "\u2014"}</div><div style={{ gridColumn: "1/-1" }}><span style={{ color: "#94a3b8" }}>Address:</span> {[biz.address, biz.city, biz.state, biz.zip].filter(Boolean).join(", ") || "\u2014"}</div></div></div>{owners.map((o, idx) => (<div key={idx} style={{ background: "#f8fbfc", border: "1px solid #e2eff2", borderRadius: 12, padding: "20px 24px", marginBottom: 16 }}><div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "#0b6e7f", marginBottom: 10 }}>{idx === 0 ? "Primary Owner" : `Owner ${idx + 1}`}</div><div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 24px", fontSize: 13.5, color: "#334155" }}><div><span style={{ color: "#94a3b8" }}>Name:</span> {[o.firstName, o.lastName].filter(Boolean).join(" ") || "\u2014"}</div><div><span style={{ color: "#94a3b8" }}>Ownership:</span> {o.ownership ? `${o.ownership}%` : "\u2014"}</div><div><span style={{ color: "#94a3b8" }}>SSN:</span> {o.ssn ? "\u2022\u2022\u2022-\u2022\u2022-" + o.ssn.slice(-4) : "\u2014"}</div><div><span style={{ color: "#94a3b8" }}>Credit:</span> {o.creditScore || "\u2014"}</div><div><span style={{ color: "#94a3b8" }}>Email:</span> {o.email || "\u2014"}</div><div><span style={{ color: "#94a3b8" }}>Phone:</span> {o.cell || "\u2014"}</div></div></div>))}<div style={{ marginTop: 24, borderTop: "1px solid #e2e8f0", paddingTop: 24 }}>{!docusealSrc && !docusealLoading && !docusealError && (<div style={{ textAlign: "center", padding: "20px 0" }}><p style={{ fontSize: 14, color: "#64748b", marginBottom: 16 }}>When you are ready, generate your signing document with all fields pre-filled.</p><button onClick={initDocuSeal} style={{ padding: "14px 40px", borderRadius: 12, border: "none", background: "linear-gradient(135deg, #0a5c6b, #0b6e7f)", color: "#fff", fontSize: 15, fontWeight: 700, cursor: "pointer", boxShadow: "0 4px 14px rgba(11,110,127,0.25)", display: "inline-flex", alignItems: "center", gap: 10 }}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>Generate Signing Document</button></div>)}{docusealLoading && (<div style={{ textAlign: "center", padding: "40px 0" }}><div style={{ width: 40, height: 40, border: "3px solid #e2e8f0", borderTopColor: "#0b6e7f", borderRadius: "50%", animation: "spin 0.8s linear infinite", margin: "0 auto 16px" }} /><p style={{ fontSize: 14, color: "#64748b" }}>Preparing your signing document...</p></div>)}{docusealError && (<div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 12, padding: "16px 20px", textAlign: "center" }}><p style={{ fontSize: 14, color: "#dc2626", margin: "0 0 12px" }}>{docusealError}</p><button onClick={initDocuSeal} style={{ padding: "10px 24px", borderRadius: 10, border: "1.5px solid #dc2626", background: "#fff", color: "#dc2626", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>Try Again</button></div>)}{docusealSrc && (<div><div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "#0b6e7f", marginBottom: 12 }}>Sign Your Application</div><div style={{ border: "1px solid #e2eff2", borderRadius: 12, overflow: "hidden" }}><DocuSealEmbed src={docusealSrc} email={email} onComplete={handleDocuSealComplete} /></div></div>)}</div></div></div>)}
+    </div><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0 4px" }}>{step > 0 ? (<button onClick={() => { setDocusealSrc(null); setDocusealError(null); goTo(step - 1); }} style={{ padding: "12px 28px", borderRadius: 12, border: "1.5px solid #cbd5e1", background: "#fff", color: "#475569", fontSize: 14, fontWeight: 700, cursor: "pointer" }}>{"\u2190"} Back</button>) : <div />}{step < 2 && (<button onClick={() => goTo(step + 1)} style={{ padding: "12px 32px", borderRadius: 12, border: "none", background: "linear-gradient(135deg, #0a5c6b, #0b6e7f)", color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer", boxShadow: "0 4px 14px rgba(11,110,127,0.25)" }}>{step === 0 ? "Continue to Owner Information" : "Continue to Signature"} {"\u2192"}</button>)}</div><div style={{ textAlign: "center", marginTop: 28, paddingTop: 20, borderTop: "1px solid #e2e8f0" }}><p style={{ margin: "0 0 4px", fontSize: 13, color: "#64748b" }}>Questions? Call us at <strong style={{ color: "#0b6e7f" }}>844-200-7200</strong> or visit <strong style={{ color: "#0b6e7f" }}>bigthinkcapital.com</strong></p><p style={{ margin: 0, fontSize: 11.5, color: "#94a3b8" }}>{"\u00a9"} 2026 Big Think Capital. All information is encrypted and secure.</p></div></div></div>);
 }
