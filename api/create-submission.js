@@ -1,33 +1,29 @@
 const AGENT_WEBHOOK = "https://n8n.bigthinkcapital.com/webhook/94fb281b-d231-4646-8245-bf768b6dbb89";
 const MAIN_WEBHOOK = "https://n8n.bigthinkcapital.com/webhook/ec9ccd01-c951-42b3-ac51-27a3077f6648";
 
-// Simple in-memory rate limiter (resets on cold start, ~5min window on Vercel)
+// Rate limiter
 const rateMap = new Map();
-const RATE_LIMIT = 10; // max requests per window
-const RATE_WINDOW = 60 * 1000; // 1 minute
-
+const RATE_LIMIT = 10;
+const RATE_WINDOW = 60 * 1000;
 function isRateLimited(ip) {
   const now = Date.now();
   const entry = rateMap.get(ip);
-  if (!entry || now - entry.start > RATE_WINDOW) {
-    rateMap.set(ip, { start: now, count: 1 });
-    return false;
-  }
+  if (!entry || now - entry.start > RATE_WINDOW) { rateMap.set(ip, { start: now, count: 1 }); return false; }
   entry.count++;
-  if (entry.count > RATE_LIMIT) return true;
-  return false;
+  return entry.count > RATE_LIMIT;
 }
 
-// Input sanitization - strip HTML tags, script injections, SQL patterns
+// Input sanitization
 function sanitize(val) {
   if (val === null || val === undefined) return val;
   if (typeof val === 'number' || typeof val === 'boolean') return val;
   if (typeof val === 'string') {
     return val
-      .replace(/<[^>]*>/g, '')           // strip HTML tags
-      .replace(/javascript:/gi, '')       // strip JS protocol
-      .replace(/on\w+\s*=/gi, '')         // strip event handlers
-      .replace(/['";]\s*(DROP|DELETE|INSERT|UPDATE|ALTER|EXEC)\s/gi, '') // basic SQL
+      .replace(/<[^>]*>/g, '')
+      .replace(/javascript:/gi, '')
+      .replace(/on\w+\s*=/gi, '')
+      .replace(/['";]\s*(DROP|DELETE|INSERT|UPDATE|ALTER|EXEC)\s/gi, '')
+      .replace(/\0/g, '') // null bytes
       .trim();
   }
   if (Array.isArray(val)) return val.map(sanitize);
@@ -41,8 +37,22 @@ function sanitize(val) {
   return val;
 }
 
+// Security headers applied to every response
+function setSecurityHeaders(res) {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()');
+  res.setHeader('Strict-Transport-Security', 'max-age=63072000; includeSubDomains; preload');
+  res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline'; connect-src 'self' https://n8n.bigthinkcapital.com https://sign.bigthinkcapital.com; frame-ancestors 'self'");
+}
+
 export default async function handler(req, res) {
-  // Rate limiting by IP
+  // Apply security headers to all responses
+  setSecurityHeaders(res);
+
+  // Rate limiting
   const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.headers['x-real-ip'] || 'unknown';
   if (req.method === 'POST' && isRateLimited(ip)) {
     console.log("Rate limited:", ip);
@@ -54,22 +64,20 @@ export default async function handler(req, res) {
     const { agent } = req.query;
     if (!agent) return res.status(400).json({ error: "Missing agent parameter" });
     try {
-      const response = await fetch(AGENT_WEBHOOK + "?agent=" + encodeURIComponent(agent));
+      const response = await fetch(AGENT_WEBHOOK + "?agent=" + encodeURIComponent(sanitize(agent)));
       const text = await response.text();
-      console.log("Agent raw response:", text);
       let data;
       try { data = JSON.parse(text); } catch(e) { return res.status(200).json({}); }
       const agentObj = Array.isArray(data) ? data[0] : data;
       return res.status(200).json(agentObj || {});
     } catch (error) {
-      console.error("Agent proxy error:", error.message);
       return res.status(200).json({});
     }
   }
 
   // ===== DocuSeal webhook (signing completed) =====
   if (req.method === "POST" && req.query.source === "docuseal") {
-    console.log("DocuSeal webhook received:", JSON.stringify(req.body).slice(0, 500));
+    console.log("DocuSeal webhook received");
     try {
       const payload = req.body || {};
       const eventType = payload.event_type || payload.event || "submission.completed";
@@ -100,15 +108,13 @@ export default async function handler(req, res) {
         fields,
         raw_payload: payload
       };
-      const webhookRes = await fetch(MAIN_WEBHOOK, {
+      await fetch(MAIN_WEBHOOK, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(webhookPayload)
       });
-      console.log("Forwarded to n8n:", webhookRes.status);
       return res.status(200).json({ success: true });
     } catch (error) {
-      console.error("DocuSeal webhook error:", error.message);
       return res.status(200).json({ success: false, error: error.message });
     }
   }
@@ -126,10 +132,9 @@ export default async function handler(req, res) {
   try {
     const rawBody = req.body;
 
-    // Honeypot check - if company_url field is filled, it's a bot
+    // Honeypot check
     if (rawBody._company_url) {
       console.log("Honeypot triggered from IP:", ip);
-      // Return fake success to not tip off the bot
       return res.status(200).json({ slug: "submitted", signingUrl: APP_URL + "/?signed=true" });
     }
 
@@ -137,7 +142,7 @@ export default async function handler(req, res) {
     const body = sanitize(rawBody);
     const { business, owners, email } = body;
 
-    // Send form data to webhook
+    // Send sanitized form data to webhook
     try {
       await fetch(MAIN_WEBHOOK, {
         method: "POST",
@@ -183,8 +188,6 @@ export default async function handler(req, res) {
     });
 
     const responseText = await response.text();
-    console.log("DocuSeal:", response.status, responseText);
-
     if (!response.ok) return res.status(response.status).json({ error: "DocuSeal error (" + response.status + "): " + responseText });
 
     let data;
