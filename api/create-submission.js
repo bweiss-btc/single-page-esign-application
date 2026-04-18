@@ -1,13 +1,55 @@
 const AGENT_WEBHOOK = "https://n8n.bigthinkcapital.com/webhook/94fb281b-d231-4646-8245-bf768b6dbb89";
 const MAIN_WEBHOOK = "https://n8n.bigthinkcapital.com/webhook/ec9ccd01-c951-42b3-ac51-27a3077f6648";
 
-export default async function handler(req, res) {
-  // Determine the correct app URL from the request host
-  const host = req.headers.host || "application.bigthinkcapital.com";
-  const protocol = host.includes("localhost") ? "http" : "https";
-  const APP_URL = `${protocol}://${host}`;
+// Simple in-memory rate limiter (resets on cold start, ~5min window on Vercel)
+const rateMap = new Map();
+const RATE_LIMIT = 10; // max requests per window
+const RATE_WINDOW = 60 * 1000; // 1 minute
 
-  // ===== GET = agent lookup proxy (avoids CORS) =====
+function isRateLimited(ip) {
+  const now = Date.now();
+  const entry = rateMap.get(ip);
+  if (!entry || now - entry.start > RATE_WINDOW) {
+    rateMap.set(ip, { start: now, count: 1 });
+    return false;
+  }
+  entry.count++;
+  if (entry.count > RATE_LIMIT) return true;
+  return false;
+}
+
+// Input sanitization - strip HTML tags, script injections, SQL patterns
+function sanitize(val) {
+  if (val === null || val === undefined) return val;
+  if (typeof val === 'number' || typeof val === 'boolean') return val;
+  if (typeof val === 'string') {
+    return val
+      .replace(/<[^>]*>/g, '')           // strip HTML tags
+      .replace(/javascript:/gi, '')       // strip JS protocol
+      .replace(/on\w+\s*=/gi, '')         // strip event handlers
+      .replace(/['";]\s*(DROP|DELETE|INSERT|UPDATE|ALTER|EXEC)\s/gi, '') // basic SQL
+      .trim();
+  }
+  if (Array.isArray(val)) return val.map(sanitize);
+  if (typeof val === 'object') {
+    const clean = {};
+    for (const [k, v] of Object.entries(val)) {
+      clean[sanitize(k)] = sanitize(v);
+    }
+    return clean;
+  }
+  return val;
+}
+
+export default async function handler(req, res) {
+  // Rate limiting by IP
+  const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.headers['x-real-ip'] || 'unknown';
+  if (req.method === 'POST' && isRateLimited(ip)) {
+    console.log("Rate limited:", ip);
+    return res.status(429).json({ error: "Too many requests. Please wait a moment and try again." });
+  }
+
+  // ===== GET = agent lookup proxy =====
   if (req.method === "GET") {
     const { agent } = req.query;
     if (!agent) return res.status(400).json({ error: "Missing agent parameter" });
@@ -39,7 +81,7 @@ export default async function handler(req, res) {
       if (firstSubmitter.documents) documents.push(...firstSubmitter.documents);
       const fields = {};
       if (firstSubmitter.fields && Array.isArray(firstSubmitter.fields)) {
-        for (const f of firstSubmitter.fields) { fields[f.name] = f.value; }
+        for (const f of firstSubmitter.fields) fields[f.name] = f.value;
       }
       const webhookPayload = {
         event: "application_signed",
@@ -51,13 +93,20 @@ export default async function handler(req, res) {
         submitter_id: firstSubmitter.id || null,
         slug: firstSubmitter.slug || null,
         status: firstSubmitter.status || submissionData.status || "completed",
-        signed_documents: documents.map(d => ({ name: d.name || d.filename || "signed-document", url: d.url || d.download_url || null })),
-        fields: fields,
+        signed_documents: documents.map(d => ({
+          name: d.name || d.filename || "signed-document",
+          url: d.url || d.download_url || null
+        })),
+        fields,
         raw_payload: payload
       };
-      const webhookRes = await fetch(MAIN_WEBHOOK, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(webhookPayload) });
+      const webhookRes = await fetch(MAIN_WEBHOOK, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(webhookPayload)
+      });
       console.log("Forwarded to n8n:", webhookRes.status);
-      return res.status(200).json({ success: true, message: "Webhook processed" });
+      return res.status(200).json({ success: true });
     } catch (error) {
       console.error("DocuSeal webhook error:", error.message);
       return res.status(200).json({ success: false, error: error.message });
@@ -68,16 +117,33 @@ export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
   const { DOCUSEAL_BASE_ENDPOINT, DOCUSEAL_TEMPLATE_ID, DOCUSEAL_API_KEY } = process.env;
+  const APP_URL = "https://single-page-esign-application.vercel.app";
 
   if (!DOCUSEAL_API_KEY) return res.status(500).json({ error: "DOCUSEAL_API_KEY is not set" });
   if (!DOCUSEAL_BASE_ENDPOINT) return res.status(500).json({ error: "DOCUSEAL_BASE_ENDPOINT is not set" });
   if (!DOCUSEAL_TEMPLATE_ID) return res.status(500).json({ error: "DOCUSEAL_TEMPLATE_ID is not set" });
 
   try {
-    const { business, owners, email } = req.body;
+    const rawBody = req.body;
 
+    // Honeypot check - if company_url field is filled, it's a bot
+    if (rawBody._company_url) {
+      console.log("Honeypot triggered from IP:", ip);
+      // Return fake success to not tip off the bot
+      return res.status(200).json({ slug: "submitted", signingUrl: APP_URL + "/?signed=true" });
+    }
+
+    // Sanitize all input
+    const body = sanitize(rawBody);
+    const { business, owners, email } = body;
+
+    // Send form data to webhook
     try {
-      await fetch(MAIN_WEBHOOK, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ event: "application_submitted", step: "docuseal_created", timestamp: new Date().toISOString(), email, business, owners }) });
+      await fetch(MAIN_WEBHOOK, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ event: "application_submitted", step: "docuseal_created", timestamp: new Date().toISOString(), email, business, owners })
+      });
     } catch (e) {}
 
     const fields = [];
@@ -98,8 +164,6 @@ export default async function handler(req, res) {
     fields.push({ name: "Owner Signature Date", default_value: today, readonly: true });
 
     const submitterEmail = ownerEmail || "applicant@example.com";
-
-    // Use the dynamically determined APP_URL for redirects
     const payload = {
       template_id: parseInt(DOCUSEAL_TEMPLATE_ID),
       send_email: false,
@@ -120,7 +184,6 @@ export default async function handler(req, res) {
 
     const responseText = await response.text();
     console.log("DocuSeal:", response.status, responseText);
-    console.log("Redirect URL:", APP_URL + "/?signed=true");
 
     if (!response.ok) return res.status(response.status).json({ error: "DocuSeal error (" + response.status + "): " + responseText });
 
