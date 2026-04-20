@@ -69,8 +69,13 @@ export default async function handler(req, res) {
       if (firstSubmitter.fields && Array.isArray(firstSubmitter.fields)) {
         for (const f of firstSubmitter.fields) fields[f.name] = f.value;
       }
+      const metadata = submissionData.metadata || {};
+      let parsedMetadata = metadata;
+      if (typeof metadata === 'string') { try { parsedMetadata = JSON.parse(metadata); } catch(e) { parsedMetadata = {}; } }
+      const callbackSlug = parsedMetadata.slug || null;
+      const callbackAgentInfo = parsedMetadata.agent_info || null;
       await fetch(MAIN_WEBHOOK, { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ event: "application_signed", step: "docuseal_completed", docuseal_event: payload.event_type || "submission.completed", timestamp: new Date().toISOString(), submission_id: submissionData.id || null, submitter_email: firstSubmitter.email || null, status: firstSubmitter.status || "completed", signed_documents: documents.map(d => ({ name: d.name || d.filename || "signed-document", url: d.url || d.download_url || null })), fields, raw_payload: payload })
+        body: JSON.stringify({ event: "application_signed", step: "docuseal_completed", docuseal_event: payload.event_type || "submission.completed", timestamp: new Date().toISOString(), submission_id: submissionData.id || null, submitter_email: firstSubmitter.email || null, status: firstSubmitter.status || "completed", slug: callbackSlug, agent_param: callbackSlug, agent_info: callbackAgentInfo, signed_documents: documents.map(d => ({ name: d.name || d.filename || "signed-document", url: d.url || d.download_url || null })), fields, raw_payload: payload })
       });
       return res.status(200).json({ success: true });
     } catch (error) { return res.status(200).json({ success: false }); }
@@ -86,9 +91,9 @@ export default async function handler(req, res) {
     if (rawBody._company_url) return res.status(200).json({ slug: "submitted", signingUrl: APP_URL + "/?signed=true" });
 
     const body = sanitize(rawBody);
-    const { business, owners, email } = body;
+    const { business, owners, email, slug, agent_info } = body;
 
-    try { await fetch(MAIN_WEBHOOK, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ event: "application_submitted", step: "docuseal_created", timestamp: new Date().toISOString(), email, business, owners }) }); } catch (e) {}
+    try { await fetch(MAIN_WEBHOOK, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ event: "application_submitted", step: "docuseal_created", timestamp: new Date().toISOString(), email, slug: slug || null, agent_param: slug || null, agent_info: agent_info || null, business, owners }) }); } catch (e) {}
 
     const fields = [];
     const today = new Date().toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" });
@@ -107,7 +112,7 @@ export default async function handler(req, res) {
     const redirectUrl = APP_URL + "/?signed=true";
     const response = await fetch(DOCUSEAL_BASE_ENDPOINT + "/api/submissions", {
       method: "POST", headers: { "X-Auth-Token": DOCUSEAL_API_KEY, "Content-Type": "application/json" },
-      body: JSON.stringify({ template_id: parseInt(DOCUSEAL_TEMPLATE_ID), send_email: false, completed_redirect_url: redirectUrl, submitters: [{ email: ownerEmail || "applicant@example.com", role: "Owner 1", fields, completed_redirect_url: redirectUrl }] })
+      body: JSON.stringify({ template_id: parseInt(DOCUSEAL_TEMPLATE_ID), send_email: false, completed_redirect_url: redirectUrl, metadata: JSON.stringify({ slug: slug || null, agent_info: agent_info || null }), submitters: [{ email: ownerEmail || "applicant@example.com", role: "Owner 1", fields, completed_redirect_url: redirectUrl, metadata: JSON.stringify({ slug: slug || null, agent_info: agent_info || null }) }] })
     });
 
     const responseText = await response.text();
