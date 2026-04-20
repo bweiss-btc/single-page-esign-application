@@ -112,7 +112,7 @@ export default async function handler(req, res) {
     const redirectUrl = APP_URL + "/?signed=true";
     const response = await fetch(DOCUSEAL_BASE_ENDPOINT + "/api/submissions", {
       method: "POST", headers: { "X-Auth-Token": DOCUSEAL_API_KEY, "Content-Type": "application/json" },
-      body: JSON.stringify({ template_id: parseInt(DOCUSEAL_TEMPLATE_ID), send_email: false, completed_redirect_url: redirectUrl, metadata: JSON.stringify({ slug: slug || null, agent_info: agent_info || null }), submitters: [{ email: ownerEmail || "applicant@example.com", role: "Owner 1", fields, completed_redirect_url: redirectUrl, metadata: JSON.stringify({ slug: slug || null, agent_info: agent_info || null }) }] })
+      body: JSON.stringify({ template_id: parseInt(DOCUSEAL_TEMPLATE_ID), send_email: false, completed_redirect_url: redirectUrl, metadata: { slug: slug || null, agent_info: agent_info || null }, submitters: [{ email: ownerEmail || "applicant@example.com", role: "Owner 1", fields, completed_redirect_url: redirectUrl, metadata: { slug: slug || null, agent_info: agent_info || null } }] })
     });
 
     const responseText = await response.text();
