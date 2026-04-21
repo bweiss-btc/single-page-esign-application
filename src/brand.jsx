@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { STEPS, LOGO, AGENT_FALLBACK_ICON, NV1, NV2, NV3 } from "./constants";
 import { getInitials } from "./utils";
 
@@ -11,11 +11,14 @@ export function TopBar() {
   );
 }
 
-// Renders an agent photo with S3 fallback to b-icon.png when no photo is set
-function AgentPhoto({ agent, size = 76 }) {
-  const hasPhoto = !!agent.Photo;
+// Renders an agent photo with S3 fallback to b-icon.png. Falls back when (a) agent.Photo
+// is empty/null OR (b) the image fails to load in the browser (broken URL, 403, etc.).
+function AgentPhoto({ agent, size = 76, fallbackPadding }) {
+  const [errored, setErrored] = useState(false);
+  const hasPhoto = !!agent.Photo && !errored;
   const src = hasPhoto ? agent.Photo : AGENT_FALLBACK_ICON;
-  return <img src={src} alt="" style={{ width: "100%", height: "100%", objectFit: hasPhoto ? "cover" : "contain", background: hasPhoto ? "transparent" : NV1, padding: hasPhoto ? 0 : size * 0.18 }} />;
+  const pad = fallbackPadding !== undefined ? fallbackPadding : size * 0.18;
+  return <img src={src} alt="" onError={() => setErrored(true)} style={{ width: "100%", height: "100%", objectFit: hasPhoto ? "cover" : "contain", background: hasPhoto ? "transparent" : NV1, padding: hasPhoto ? 0 : pad }} />;
 }
 
 export function AgentCard({ agent, collapsed, onToggle, isMobile }) {
@@ -57,13 +60,12 @@ export function AgentCard({ agent, collapsed, onToggle, isMobile }) {
 
 export function AgentFooter({ agent, isMobile }) {
   if (!agent) return null;
-  const hasPhoto = !!agent.Photo;
   const stickyStyle = isMobile ? { position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 90 } : {};
   return (
     <div style={{ background: `linear-gradient(135deg,${NV1},${NV2},${NV3})`, padding: isMobile ? "10px 12px" : "12px 16px", display: "flex", alignItems: "center", justifyContent: "center", gap: isMobile ? 8 : 12, flexWrap: "wrap", ...stickyStyle }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <div style={{ width: 26, height: 26, borderRadius: "50%", overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", background: NV1, color: "#fff", fontSize: 10, fontWeight: 700, flexShrink: 0 }}>
-          <img src={hasPhoto ? agent.Photo : AGENT_FALLBACK_ICON} alt="" style={{ width: "100%", height: "100%", objectFit: hasPhoto ? "cover" : "contain", padding: hasPhoto ? 0 : 4 }} />
+          <AgentPhoto agent={agent} size={26} fallbackPadding={4} />
         </div>
         <span style={{ color: "#fff", fontSize: isMobile ? 12 : 13, fontWeight: 700 }}>{agent.Name}</span>
       </div>
