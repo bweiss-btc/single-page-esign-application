@@ -99,15 +99,23 @@ export default async function handler(req, res) {
     const today = new Date().toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" });
     const ownerEmail = email || owners?.[0]?.email || "";
     const b = business || {};
-    const o = (owners && owners.length > 0) ? owners[0] : {};
+    const o1 = (owners && owners.length > 0) ? owners[0] : {};
+    const o2 = (owners && owners.length > 1) ? owners[1] : null;
 
     for (const [name, value] of Object.entries({ "Business Name": b.name, "DBA Name": b.dba, "Business Start Date": b.startDate, "Legal Entity": b.entity, "Industry": b.industry, "Tax Id": b.taxId, "Business Description": b.description, "Amount Requested": b.amountRequested, "Annual Revenue": b.annualRevenue, "Use of Proceeds": b.useOfProceeds, "Products Interested In": b.product, "Business Address": b.address, "Business City": b.city, "Business State": b.state, "Business Zip": b.zip, "Website": b.website, "Phone": b.phone, "Owns Real Estate": b.ownRealEstate, "Has Open Business Loans": b.openLoans })) {
       fields.push({ name, default_value: (value && String(value).trim()) || " ", readonly: true });
     }
-    for (const [name, value] of Object.entries({ "Owner First Name": o.firstName, "Owner Last Name": o.lastName, "Owner Birthday": o.dob, "Owner SSN": o.ssn, "Owner Percentage": o.ownership, "Owner Address": o.address, "Owner City": o.city, "Owner State": o.state, "Owner Zip": o.zip, "Owner Credit Score": o.creditScore, "Owner Email": ownerEmail, "Owner Phone": o.cell })) {
+    for (const [name, value] of Object.entries({ "Owner First Name": o1.firstName, "Owner Last Name": o1.lastName, "Owner Birthday": o1.dob, "Owner SSN": o1.ssn, "Owner Percentage": o1.ownership, "Owner Address": o1.address, "Owner City": o1.city, "Owner State": o1.state, "Owner Zip": o1.zip, "Owner Credit Score": o1.creditScore, "Owner Email": ownerEmail, "Owner Phone": o1.cell })) {
       fields.push({ name, default_value: (value && String(value).trim()) || " ", readonly: true });
     }
     fields.push({ name: "Owner Signature Date", default_value: today, readonly: true });
+
+    if (o2) {
+      for (const [name, value] of Object.entries({ "Owner 2 First Name": o2.firstName, "Owner 2 Last Name": o2.lastName, "Owner 2 Birthday": o2.dob, "Owner 2 SSN": o2.ssn, "Owner 2 Percentage": o2.ownership, "Owner 2 Address": o2.address, "Owner 2 City": o2.city, "Owner 2 State": o2.state, "Owner 2 Zip": o2.zip, "Owner 2 Credit Score": o2.creditScore, "Owner 2 Email": o2.email, "Owner 2 Phone": o2.cell })) {
+        fields.push({ name, default_value: (value && String(value).trim()) || " ", readonly: true });
+      }
+      fields.push({ name: "Owner 2 Signature Date", default_value: today, readonly: true });
+    }
 
     const redirectUrl = APP_URL + "/?signed=true";
     const response = await fetch(DOCUSEAL_BASE_ENDPOINT + "/api/submissions", {
