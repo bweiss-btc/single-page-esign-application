@@ -13,7 +13,9 @@ export function TopBar() {
 
 // Renders an agent photo with S3 fallback to b-icon.png. Falls back when (a) agent.Photo
 // is empty/null OR (b) the image fails to load in the browser (broken URL, 403, etc.).
-function AgentPhoto({ agent, size = 76, fallbackPadding }) {
+// Exported so App.jsx can use it inline (email entry hero + thanks page) instead of
+// inline <img> tags that lacked onError.
+export function AgentPhoto({ agent, size = 76, fallbackPadding }) {
   const [errored, setErrored] = useState(false);
   const hasPhoto = !!agent.Photo && !errored;
   const src = hasPhoto ? agent.Photo : AGENT_FALLBACK_ICON;
