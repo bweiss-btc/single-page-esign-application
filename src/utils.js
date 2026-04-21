@@ -4,11 +4,44 @@ export function getParam(k) {
   return new URLSearchParams(window.location.search).get(k);
 }
 
+// Accepts a raw agent payload from Salesforce / the n8n lookup webhook and returns
+// a stable { Name, Email, Phone, Photo } shape for the UI. Different Salesforce
+// objects expose photo URLs under different field names (User has FullPhotoUrl,
+// Contact often uses a custom __c field, etc.), so we probe a wide list.
+// If nothing matches, Photo comes back as "" and the UI shows the b-icon fallback.
+// The raw key list is logged once so we can see which field the record actually has.
 export function normalizeAgent(d) {
   if (!d) return null;
   const n = d.Name || d.name;
   if (!n) return null;
-  return { Name: n, Email: d.Email || d.email || "", Phone: d.Phone || d.phone || "", Photo: d.User_Photo_URL__c || d.photo || d.Photo || "" };
+  const photo =
+    d.User_Photo_URL__c ||
+    d.Headshot_URL__c ||
+    d.Headshot__c ||
+    d.Profile_Photo_URL__c ||
+    d.Profile_Photo__c ||
+    d.Photo_URL__c ||
+    d.Avatar_URL__c ||
+    d.User_Avatar_URL__c ||
+    d.Image_URL__c ||
+    d.Photo ||
+    d.photo ||
+    d.PhotoUrl ||
+    d.photoUrl ||
+    d.photo_url ||
+    d.FullPhotoUrl ||
+    d.MediumPhotoUrl ||
+    d.SmallPhotoUrl ||
+    d.headshot ||
+    d.avatar ||
+    d.image ||
+    "";
+  try {
+    if (typeof console !== "undefined" && console.log) {
+      console.log("[BTC] Agent lookup keys:", Object.keys(d), "matched Photo:", photo || "(none)");
+    }
+  } catch (e) {}
+  return { Name: n, Email: d.Email || d.email || "", Phone: d.Phone || d.phone || "", Photo: photo };
 }
 
 export function getInitials(name) {
@@ -73,7 +106,7 @@ export function fileToBase64(file) {
   });
 }
 
-// SSN masking: show •••-••-1234 when not focused
+// SSN masking: show \u2022\u2022\u2022-\u2022\u2022-1234 when not focused
 export function maskSSN(v) {
   if (!v || v.length < 4) return v;
   const d = v.replace(/\D/g, "");
