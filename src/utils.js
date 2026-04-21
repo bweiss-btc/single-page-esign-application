@@ -6,15 +6,14 @@ export function getParam(k) {
 
 // Accepts a raw agent payload from Salesforce / the n8n lookup webhook and returns
 // a stable { Name, Email, Phone, Photo } shape for the UI. Different Salesforce
-// objects expose photo URLs under different field names (User has FullPhotoUrl,
-// Contact often uses a custom __c field, etc.), so we probe a wide list.
-// If nothing matches, Photo comes back as "" and the UI shows the b-icon fallback.
-// The raw key list is logged once so we can see which field the record actually has.
+// objects expose photo URLs under different field names, so we probe a wide list.
+// Priority order: confirmed field first, then common variants.
 export function normalizeAgent(d) {
   if (!d) return null;
   const n = d.Name || d.name;
   if (!n) return null;
   const photo =
+    d.Headshot_Photo__c ||
     d.User_Photo_URL__c ||
     d.Headshot_URL__c ||
     d.Headshot__c ||
