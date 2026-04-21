@@ -37,7 +37,10 @@ function setSecurityHeaders(res) {
   res.setHeader('Strict-Transport-Security', 'max-age=63072000; includeSubDomains; preload');
 }
 
-// Cache template field names for a short window to avoid fetching on every submission.
+// Cache template field names for a short window. Template fields can be assigned to different
+// submitter roles; the same name (e.g. "Owner First Name") may appear on multiple submitters.
+// The cache just records which names exist SOMEWHERE on the template so we can drop unknown
+// fields before submission (safety net against typos or removed fields).
 let _templateFieldsCache = null;
 let _templateFieldsCacheAt = 0;
 const TEMPLATE_CACHE_MS = 5 * 60 * 1000;
@@ -90,13 +93,13 @@ export default async function handler(req, res) {
       if (firstSubmitter.fields && Array.isArray(firstSubmitter.fields)) {
         for (const f of firstSubmitter.fields) fields[f.name] = f.value;
       }
-      const metadata = submissionData.metadata || {};
+      const metadata = submissionData.metadata || firstSubmitter.metadata || {};
       let parsedMetadata = metadata;
       if (typeof metadata === 'string') { try { parsedMetadata = JSON.parse(metadata); } catch(e) { parsedMetadata = {}; } }
       const callbackSlug = parsedMetadata.slug || null;
       const callbackAgentInfo = parsedMetadata.agent_info || null;
       await fetch(MAIN_WEBHOOK, { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ event: "application_signed", step: "docuseal_completed", docuseal_event: payload.event_type || "submission.completed", timestamp: new Date().toISOString(), submission_id: submissionData.id || null, submitter_email: firstSubmitter.email || null, status: firstSubmitter.status || "completed", slug: callbackSlug, agent_param: callbackSlug, agent_info: callbackAgentInfo, signed_documents: documents.map(d => ({ name: d.name || d.filename || "signed-document", url: d.url || d.download_url || null })), fields, raw_payload: payload })
+        body: JSON.stringify({ event: "application_signed", step: "docuseal_completed", docuseal_event: payload.event_type || "submission.completed", timestamp: new Date().toISOString(), submission_id: submissionData.id || null, submitter_email: firstSubmitter.email || null, submitter_role: firstSubmitter.role || null, status: firstSubmitter.status || "completed", slug: callbackSlug, agent_param: callbackSlug, agent_info: callbackAgentInfo, signed_documents: documents.map(d => ({ name: d.name || d.filename || "signed-document", url: d.url || d.download_url || null })), fields, raw_payload: payload })
       });
       return res.status(200).json({ success: true });
     } catch (error) { return res.status(200).json({ success: false }); }
@@ -116,39 +119,69 @@ export default async function handler(req, res) {
 
     try { await fetch(MAIN_WEBHOOK, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ event: "application_submitted", step: "docuseal_created", timestamp: new Date().toISOString(), email, slug: slug || null, agent_param: slug || null, agent_info: agent_info || null, business, owners }) }); } catch (e) {}
 
-    const fields = [];
     const today = new Date().toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" });
     const ownerEmail = email || owners?.[0]?.email || "";
     const b = business || {};
     const o1 = (owners && owners.length > 0) ? owners[0] : {};
     const o2 = (owners && owners.length > 1) ? owners[1] : null;
 
+    // Build Owner 1 submitter's field list: business info + their own owner fields.
+    // Owner fields use the same names as the template's "Owner 1" submitter role.
+    const o1Fields = [];
     for (const [name, value] of Object.entries({ "Business Name": b.name, "DBA Name": b.dba, "Business Start Date": b.startDate, "Legal Entity": b.entity, "Industry": b.industry, "Tax Id": b.taxId, "Business Description": b.description, "Amount Requested": b.amountRequested, "Annual Revenue": b.annualRevenue, "Use of Proceeds": b.useOfProceeds, "Products Interested In": b.product, "Business Address": b.address, "Business City": b.city, "Business State": b.state, "Business Zip": b.zip, "Website": b.website, "Phone": b.phone, "Owns Real Estate": b.ownRealEstate, "Has Open Business Loans": b.openLoans })) {
-      fields.push({ name, default_value: (value && String(value).trim()) || " ", readonly: true });
+      o1Fields.push({ name, default_value: (value && String(value).trim()) || " ", readonly: true });
     }
     for (const [name, value] of Object.entries({ "Owner First Name": o1.firstName, "Owner Last Name": o1.lastName, "Owner Birthday": o1.dob, "Owner SSN": o1.ssn, "Owner Percentage": o1.ownership, "Owner Address": o1.address, "Owner City": o1.city, "Owner State": o1.state, "Owner Zip": o1.zip, "Owner Credit Score": o1.creditScore, "Owner Email": ownerEmail, "Owner Phone": o1.cell })) {
-      fields.push({ name, default_value: (value && String(value).trim()) || " ", readonly: true });
+      o1Fields.push({ name, default_value: (value && String(value).trim()) || " ", readonly: true });
     }
-    fields.push({ name: "Owner Signature Date", default_value: today, readonly: true });
+    o1Fields.push({ name: "Owner Signature Date", default_value: today, readonly: true });
 
+    // Build Owner 2 submitter's field list using the SAME field names as Owner 1. DocuSeal
+    // scopes fields by submitter role, so each role has its own copy of "Owner First Name" etc.
+    let o2Fields = null;
     if (o2) {
-      for (const [name, value] of Object.entries({ "Owner 2 First Name": o2.firstName, "Owner 2 Last Name": o2.lastName, "Owner 2 Birthday": o2.dob, "Owner 2 SSN": o2.ssn, "Owner 2 Percentage": o2.ownership, "Owner 2 Address": o2.address, "Owner 2 City": o2.city, "Owner 2 State": o2.state, "Owner 2 Zip": o2.zip, "Owner 2 Credit Score": o2.creditScore, "Owner 2 Email": o2.email, "Owner 2 Phone": o2.cell })) {
-        fields.push({ name, default_value: (value && String(value).trim()) || " ", readonly: true });
+      o2Fields = [];
+      for (const [name, value] of Object.entries({ "Owner First Name": o2.firstName, "Owner Last Name": o2.lastName, "Owner Birthday": o2.dob, "Owner SSN": o2.ssn, "Owner Percentage": o2.ownership, "Owner Address": o2.address, "Owner City": o2.city, "Owner State": o2.state, "Owner Zip": o2.zip, "Owner Credit Score": o2.creditScore, "Owner Email": o2.email, "Owner Phone": o2.cell })) {
+        o2Fields.push({ name, default_value: (value && String(value).trim()) || " ", readonly: true });
       }
-      fields.push({ name: "Owner 2 Signature Date", default_value: today, readonly: true });
+      o2Fields.push({ name: "Owner Signature Date", default_value: today, readonly: true });
     }
 
-    // Filter fields to only those present on the DocuSeal template. Without this filter, any
-    // field we push that isn't defined on the template (e.g. "Owner 2 First Name" when the
-    // template only has Owner 1 slots) causes DocuSeal to reject the entire submission.
-    let safeFields = fields;
+    // Safety net: drop any field whose name isn't present on the template at all.
+    let safeO1 = o1Fields;
+    let safeO2 = o2Fields;
     const known = await getTemplateFieldNames(DOCUSEAL_BASE_ENDPOINT, DOCUSEAL_TEMPLATE_ID, DOCUSEAL_API_KEY);
-    if (known && known.size > 0) safeFields = fields.filter(f => known.has(f.name));
+    if (known && known.size > 0) {
+      safeO1 = o1Fields.filter(f => known.has(f.name));
+      if (o2Fields) safeO2 = o2Fields.filter(f => known.has(f.name));
+    }
 
     const redirectUrl = APP_URL + "/?signed=true" + (slug ? "&agent=" + encodeURIComponent(slug) : "");
+
+    // Submitters array: Owner 1 is the person currently in the browser, so we redirect them
+    // and suppress the email. Owner 2 is remote, so DocuSeal emails them their signing link.
+    const submitters = [{
+      email: ownerEmail || "applicant@example.com",
+      role: "Owner 1",
+      fields: safeO1,
+      completed_redirect_url: redirectUrl,
+      send_email: false,
+      metadata: { slug: slug || null, agent_info: agent_info || null, submitter_role: "owner_1" }
+    }];
+    if (o2 && safeO2) {
+      submitters.push({
+        email: o2.email || "applicant2@example.com",
+        role: "Owner 2",
+        fields: safeO2,
+        completed_redirect_url: redirectUrl,
+        send_email: true,
+        metadata: { slug: slug || null, agent_info: agent_info || null, submitter_role: "owner_2" }
+      });
+    }
+
     const response = await fetch(DOCUSEAL_BASE_ENDPOINT + "/api/submissions", {
       method: "POST", headers: { "X-Auth-Token": DOCUSEAL_API_KEY, "Content-Type": "application/json" },
-      body: JSON.stringify({ template_id: parseInt(DOCUSEAL_TEMPLATE_ID), send_email: false, completed_redirect_url: redirectUrl, metadata: { slug: slug || null, agent_info: agent_info || null }, submitters: [{ email: ownerEmail || "applicant@example.com", role: "Owner 1", fields: safeFields, completed_redirect_url: redirectUrl, metadata: { slug: slug || null, agent_info: agent_info || null } }] })
+      body: JSON.stringify({ template_id: parseInt(DOCUSEAL_TEMPLATE_ID), send_email: false, completed_redirect_url: redirectUrl, metadata: { slug: slug || null, agent_info: agent_info || null }, submitters })
     });
 
     const responseText = await response.text();
@@ -156,9 +189,12 @@ export default async function handler(req, res) {
 
     let data;
     try { data = JSON.parse(responseText); } catch (e) { return res.status(500).json({ error: "Invalid JSON" }); }
-    const submitter = Array.isArray(data) ? data[0] : data;
-    if (!submitter?.slug) return res.status(500).json({ error: "No slug returned" });
+    const submitterList = Array.isArray(data) ? data : [data];
+    // Redirect the person in the browser to their OWN signing link (Owner 1), not whichever
+    // submitter happens to come back first.
+    const owner1Sub = submitterList.find(s => s && s.role === "Owner 1") || submitterList[0];
+    if (!owner1Sub?.slug) return res.status(500).json({ error: "No slug returned" });
 
-    return res.status(200).json({ slug: submitter.slug, signingUrl: DOCUSEAL_BASE_ENDPOINT + "/s/" + submitter.slug });
+    return res.status(200).json({ slug: owner1Sub.slug, signingUrl: DOCUSEAL_BASE_ENDPOINT + "/s/" + owner1Sub.slug });
   } catch (error) { return res.status(500).json({ error: "Failed: " + error.message }); }
 }
