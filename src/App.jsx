@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { STATES, ENTITY_OPTS, PRODUCT_OPTS, PROCEEDS_OPTS, YES_NO, emptyOwner, WEBHOOK, LOOKUP_WEBHOOK, LOGO, AGENT_FALLBACK_ICON, NV1, NV2, NV3 } from "./constants";
 import { getParam, normalizeAgent, getInitials, getVal, fmtPhone, rawPhone, fmtTaxId, rawTaxId, fmtZip, rawMoney, isBirthdayToday, extractDomain, scrollToError, getMonthNames } from "./utils";
 import { useIsMobile, sliderCss, mobileCss, ValidationModal, HoneypotField, SSNField, Field, MoneySliderField, NumSliderField, StateSelect, Select, Textarea, Row } from "./ui";
-import { TopBar, AgentCard, AgentFooter, Footer, Toast, StepBar, SH } from "./brand";
+import { TopBar, AgentCard, AgentFooter, AgentPhoto, Footer, Toast, StepBar, SH } from "./brand";
 import { AddressField } from "./places";
 
 let _agentData = null;
@@ -307,7 +307,6 @@ export default function App() {
 
   if (page === "thanks") {
     const ini = agent ? getInitials(agent.Name) : "";
-    const hasPhoto = agent && !!agent.Photo;
     return (
       <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column", background: "#f1f5f9", fontFamily: "'Plus Jakarta Sans',sans-serif", ...bottomPad }}>
         <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
@@ -325,7 +324,7 @@ export default function App() {
               <div style={{ background: "#fff", borderRadius: 16, padding: "18px 20px", boxShadow: "0 2px 10px rgba(0,0,0,0.06)", border: "1px solid #e2e8f0", marginTop: 8 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: agent.Email || agent.Phone ? 14 : 0 }}>
                   <div style={{ width: 52, height: 52, borderRadius: "50%", background: NV1, flexShrink: 0, overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                    <img src={hasPhoto ? agent.Photo : AGENT_FALLBACK_ICON} alt="" style={{ width: "100%", height: "100%", objectFit: hasPhoto ? "cover" : "contain", padding: hasPhoto ? 0 : 9 }} />
+                    <AgentPhoto agent={agent} size={52} fallbackPadding={9} />
                   </div>
                   <div style={{ flex: 1, minWidth: 0, textAlign: "left" }}>
                     <p style={{ margin: 0, fontSize: 10, fontWeight: 700, color: NV3, letterSpacing: "0.1em", textTransform: "uppercase" }}>Your Funding Expert</p>
@@ -360,7 +359,6 @@ export default function App() {
 
   if (showEmail) {
     const ini = agent ? getInitials(agent.Name) : "";
-    const hasPhoto = agent && !!agent.Photo;
     return (
       <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column", background: `linear-gradient(170deg,${NV1} 0%,#0d2137 50%,${NV2} 100%)`, fontFamily: "'Plus Jakarta Sans',sans-serif", ...bottomPad }}>
         <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
@@ -380,7 +378,7 @@ export default function App() {
               {agent && (
                 <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", background: "#f5f8fb", borderRadius: 12, border: "1px solid #e4eaf0", marginBottom: 20 }}>
                   <div style={{ width: 42, height: 42, borderRadius: "50%", background: `linear-gradient(135deg,${NV1},${NV3})`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, overflow: "hidden" }}>
-                    <img src={hasPhoto ? agent.Photo : AGENT_FALLBACK_ICON} alt="" style={{ width: "100%", height: "100%", objectFit: hasPhoto ? "cover" : "contain", padding: hasPhoto ? 0 : 7 }} />
+                    <AgentPhoto agent={agent} size={42} fallbackPadding={7} />
                   </div>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <p style={{ margin: 0, fontSize: 9, fontWeight: 700, letterSpacing: "0.1em", color: NV3, textTransform: "uppercase" }}>Your Assigned Expert</p>
