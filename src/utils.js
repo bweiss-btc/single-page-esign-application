@@ -4,43 +4,23 @@ export function getParam(k) {
   return new URLSearchParams(window.location.search).get(k);
 }
 
-// Accepts a raw agent payload from Salesforce / the n8n lookup webhook and returns
-// a stable { Name, Email, Phone, Photo } shape for the UI. Different Salesforce
-// objects expose photo URLs under different field names, so we probe a wide list.
-// Priority order: confirmed field first, then common variants.
+// Normalizes the agent lookup webhook response into a stable { Name, Email, Phone, Photo }
+// shape for the UI. The n8n workflow already maps Salesforce field names (e.g.
+// Headshot_Photo__c) down to lowercase keys, so we just accept either case here.
 export function normalizeAgent(d) {
-  if (!d) return null;
-  const n = d.Name || d.name;
-  if (!n) return null;
-  const photo =
-    d.Headshot_Photo__c ||
-    d.User_Photo_URL__c ||
-    d.Headshot_URL__c ||
-    d.Headshot__c ||
-    d.Profile_Photo_URL__c ||
-    d.Profile_Photo__c ||
-    d.Photo_URL__c ||
-    d.Avatar_URL__c ||
-    d.User_Avatar_URL__c ||
-    d.Image_URL__c ||
-    d.Photo ||
-    d.photo ||
-    d.PhotoUrl ||
-    d.photoUrl ||
-    d.photo_url ||
-    d.FullPhotoUrl ||
-    d.MediumPhotoUrl ||
-    d.SmallPhotoUrl ||
-    d.headshot ||
-    d.avatar ||
-    d.image ||
-    "";
+  if (!d || (!d.name && !d.Name)) return null;
+  const agent = {
+    Name:  d.name  || d.Name  || "",
+    Email: d.email || d.Email || "",
+    Phone: d.phone || d.Phone || "",
+    Photo: d.photo || d.Photo || "",
+  };
   try {
     if (typeof console !== "undefined" && console.log) {
-      console.log("[BTC] Agent lookup keys:", Object.keys(d), "matched Photo:", photo || "(none)");
+      console.log("[BTC] Agent:", agent);
     }
   } catch (e) {}
-  return { Name: n, Email: d.Email || d.email || "", Phone: d.Phone || d.phone || "", Photo: photo };
+  return agent;
 }
 
 export function getInitials(name) {
