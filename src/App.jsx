@@ -157,56 +157,77 @@ export default function App() {
       const d = await res.json();
       const data = Array.isArray(d) ? d[0] : d;
       if (data && data.found !== "false" && data.notFound !== true) {
+        // -------------------------
+        // Prefill business fields
+        //
+        // The n8n webhook returns camelCase keys (company, dba, entityType, ein,
+        // businessStartDate, amountRequested, useOfProceeds, product, ownRealEstate,
+        // openLoans, ownerOwnership, ownerHomeStreet, owner2FirstName, etc.).
+        //
+        // For each field, we try every plausible key the webhook might send — the
+        // current camelCase, any legacy Salesforce API name, and any alternative
+        // naming — so future changes in the webhook shape won't silently break
+        // prefill.
+        // -------------------------
         const nb = { ...biz };
-        nb.name = getVal(data, "Company", "company", "businessName") || nb.name;
-        nb.dba = getVal(data, "DBA_Name__c", "dba") || nb.dba;
-        nb.startDate = getVal(data, "Business_Start_Date__c", "businessStartDate") || nb.startDate;
-        nb.entity = getVal(data, "Legal_Entity__c", "legalEntity") || nb.entity;
-        nb.industry = getVal(data, "Industry", "industry") || nb.industry;
-        nb.taxId = getVal(data, "Federal_Tax_Id__c", "taxId") || nb.taxId;
-        nb.description = getVal(data, "Description", "description") || nb.description;
-        nb.amountRequested = getVal(data, "Amount_Requested__c", "amountRequested") || nb.amountRequested;
-        nb.annualRevenue = getVal(data, "Annual_Revenue__c", "annualRevenue", "Business_Income__c") || nb.annualRevenue;
-        nb.useOfProceeds = getVal(data, "Use_of_Proceeds__c", "useOfProceeds") || nb.useOfProceeds;
-        nb.product = getVal(data, "Products_Interested_In__c", "product", "Real_Estate_Loan_Type__c") || nb.product;
-        nb.address = getVal(data, "Street", "Real_Estate_Address__c", "businessAddress") || nb.address;
-        nb.city = getVal(data, "City", "Real_Estate_City__c") || nb.city;
-        nb.state = getVal(data, "State", "Real_Estate_State__c") || nb.state;
-        nb.zip = getVal(data, "PostalCode", "Real_Estate_Zip__c") || nb.zip;
-        nb.website = getVal(data, "Website", "website") || nb.website;
-        nb.phone = getVal(data, "Phone", "phone") || nb.phone;
-        nb.ownRealEstate = getVal(data, "Rent_or_Own__c", "ownsRealEstate") || nb.ownRealEstate;
-        nb.openLoans = getVal(data, "Has_Open_Business_Loans__c", "hasOpenBusinessLoans") || nb.openLoans;
+        nb.name = getVal(data, "company", "Company", "businessName") || nb.name;
+        nb.dba = getVal(data, "dba", "DBA_Name__c", "csbs__DBA__c") || nb.dba;
+        nb.startDate = getVal(data, "businessStartDate", "Business_Start_Date__c", "csbs__Business_Start_Date_Current_Ownership__c") || nb.startDate;
+        nb.entity = getVal(data, "entityType", "entity", "legalEntity", "Legal_Entity__c", "csbs__Entity_Type__c") || nb.entity;
+        nb.industry = getVal(data, "industry", "Industry") || nb.industry;
+        nb.taxId = getVal(data, "ein", "taxId", "Federal_Tax_Id__c", "EIN__c") || nb.taxId;
+        nb.description = getVal(data, "description", "Description") || nb.description;
+        nb.amountRequested = getVal(data, "amountRequested", "Amount_Requested__c", "csbs__Amount_Requested__c") || nb.amountRequested;
+        nb.annualRevenue = getVal(data, "annualRevenue", "Annual_Revenue__c", "AnnualRevenue", "Business_Income__c") || nb.annualRevenue;
+        nb.useOfProceeds = getVal(data, "useOfProceeds", "Use_of_Proceeds__c", "csbs__Use_of_Proceeds__c") || nb.useOfProceeds;
+        nb.product = getVal(data, "product", "Products_Interested_In__c", "Product_you_are_Interested_in__c", "Real_Estate_Loan_Type__c") || nb.product;
+        nb.address = getVal(data, "businessStreet", "Street", "businessAddress", "Real_Estate_Address__c") || nb.address;
+        nb.city = getVal(data, "businessCity", "City", "Real_Estate_City__c") || nb.city;
+        nb.state = getVal(data, "businessState", "State", "Real_Estate_State__c") || nb.state;
+        nb.zip = getVal(data, "businessZip", "PostalCode", "Real_Estate_Zip__c") || nb.zip;
+        nb.website = getVal(data, "website", "Website") || nb.website;
+        nb.phone = getVal(data, "businessPhone", "Phone", "phone") || nb.phone;
+        nb.ownRealEstate = getVal(data, "ownRealEstate", "ownsRealEstate", "Rent_or_Own__c", "Do_you_own_real_estate__c") || nb.ownRealEstate;
+        nb.openLoans = getVal(data, "openLoans", "hasOpenBusinessLoans", "Has_Open_Business_Loans__c", "Do_you_have_open_business_loans__c") || nb.openLoans;
         if (!nb.website) { const domain = extractDomain(email); if (domain) nb.website = "https://" + domain; }
         setBiz(nb);
+
+        // -------------------------
+        // Prefill primary owner
+        // -------------------------
         const no = { ...owners[0] };
-        no.firstName = getVal(data, "FirstName", "firstName") || no.firstName;
-        no.lastName = getVal(data, "LastName", "lastName") || no.lastName;
-        no.dob = getVal(data, "csbs__Birthdate__c", "dob") || no.dob;
-        no.ssn = getVal(data, "csbs__Social_Security_Number_Unencrypted__c", "ssn") || no.ssn;
-        no.ownership = getVal(data, "Ownership_Percentage__c", "ownership") || no.ownership;
-        no.creditScore = getVal(data, "csbs__CreditScore__c", "creditScore") || no.creditScore;
-        no.address = getVal(data, "csbs__Home_Address_Street__c", "ownerAddress") || no.address;
-        no.city = getVal(data, "csbs__Home_Address_City__c", "ownerCity") || no.city;
-        no.state = getVal(data, "csbs__Home_Address_State__c", "ownerState") || no.state;
-        no.zip = getVal(data, "csbs__Home_Address_Zip_Code__c", "ownerZip") || no.zip;
-        no.email = getVal(data, "Email", "email") || email;
-        no.cell = getVal(data, "MobilePhone", "Phone", "cell") || no.cell;
+        no.firstName = getVal(data, "firstName", "FirstName") || no.firstName;
+        no.lastName = getVal(data, "lastName", "LastName") || no.lastName;
+        no.dob = getVal(data, "ownerBirthdate", "dob", "csbs__Birthdate__c") || no.dob;
+        no.ssn = getVal(data, "ownerSsn", "ssn", "csbs__Social_Security_Number_Unencrypted__c") || no.ssn;
+        no.ownership = getVal(data, "ownerOwnership", "ownership", "Ownership_Percentage__c", "csbs__Ownership_Percentage__c") || no.ownership;
+        no.creditScore = getVal(data, "creditScore", "creditScoreApplication", "csbs__CreditScore__c", "Credit_Score_Application__c") || no.creditScore;
+        no.address = getVal(data, "ownerHomeStreet", "ownerAddress", "csbs__Home_Address_Street__c") || no.address;
+        no.city = getVal(data, "ownerHomeCity", "ownerCity", "csbs__Home_Address_City__c") || no.city;
+        no.state = getVal(data, "ownerHomeState", "ownerState", "csbs__Home_Address_State__c") || no.state;
+        no.zip = getVal(data, "ownerHomeZip", "ownerZip", "csbs__Home_Address_Zip_Code__c") || no.zip;
+        no.email = getVal(data, "email", "Email") || email;
+        no.cell = getVal(data, "mobilePhone", "cell", "MobilePhone") || no.cell;
         const nOwners = [no, ...owners.slice(1)];
-        const o2 = getVal(data, "csbs__Owner_2_First_Name__c");
-        if (o2) {
+
+        // -------------------------
+        // Prefill owner 2 if present
+        // -------------------------
+        const o2FirstName = getVal(data, "owner2FirstName", "csbs__Owner_2_First_Name__c");
+        if (o2FirstName) {
           const o2o = emptyOwner();
-          o2o.firstName = o2;
-          o2o.lastName = getVal(data, "csbs__Owner_2_Last_Name__c");
-          o2o.dob = getVal(data, "csbs__Owner_2_Birthday__c");
-          o2o.ssn = getVal(data, "csbs__Owner_2_Social_Security_Number__c");
-          o2o.creditScore = getVal(data, "csbs__Owner_2_CreditScore__c");
-          o2o.address = getVal(data, "csbs__Owner_2_Home_Address_Street__c");
-          o2o.city = getVal(data, "csbs__Owner_2_Home_Address_City__c");
-          o2o.state = getVal(data, "csbs__Owner_2_Home_Address_State__c");
-          o2o.zip = getVal(data, "csbs__Owner_2_Home_Address_Zip_Code__c");
-          o2o.email = getVal(data, "csbs__Owner_2_Email__c");
-          o2o.cell = getVal(data, "csbs__Owner_2_Mobile__c");
+          o2o.firstName = o2FirstName;
+          o2o.lastName = getVal(data, "owner2LastName", "csbs__Owner_2_Last_Name__c");
+          o2o.dob = getVal(data, "owner2Birthday", "csbs__Owner_2_Birthday__c");
+          o2o.ssn = getVal(data, "owner2Ssn", "csbs__Owner_2_Social_Security_Number__c");
+          o2o.ownership = getVal(data, "owner2Ownership", "csbs__Owner_2_Ownership__c");
+          o2o.creditScore = getVal(data, "owner2CreditScore", "csbs__Owner_2_Credit_Score__c", "csbs__Owner_2_CreditScore__c");
+          o2o.address = getVal(data, "owner2HomeStreet", "csbs__Owner_2_Home_Address_Street__c");
+          o2o.city = getVal(data, "owner2HomeCity", "csbs__Owner_2_Home_Address_City__c");
+          o2o.state = getVal(data, "owner2HomeState", "csbs__Owner_2_Home_Address_State__c");
+          o2o.zip = getVal(data, "owner2HomeZip", "csbs__Owner_2_Home_Address_Zip_Code__c");
+          o2o.email = getVal(data, "owner2Email", "csbs__Owner_2_Email__c");
+          o2o.cell = getVal(data, "owner2Mobile", "csbs__Owner_2_Mobile__c");
           nOwners.push(o2o);
         }
         setOwners(nOwners);
