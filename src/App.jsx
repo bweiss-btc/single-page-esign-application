@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback } from "react";
 import { STATES, ENTITY_OPTS, PRODUCT_OPTS, PROCEEDS_OPTS, YES_NO, emptyOwner, WEBHOOK, LOOKUP_WEBHOOK, LOGO, AGENT_FALLBACK_ICON, NV1, NV2, NV3 } from "./constants";
-import { getParam, normalizeAgent, getInitials, getVal, fmtPhone, rawPhone, fmtTaxId, rawTaxId, fmtZip, rawMoney, isBirthdayToday, extractDomain, fileToBase64, scrollToError, getMonthNames } from "./utils";
+import { getParam, normalizeAgent, getInitials, getVal, fmtPhone, rawPhone, fmtTaxId, rawTaxId, fmtZip, rawMoney, isBirthdayToday, extractDomain, scrollToError, getMonthNames } from "./utils";
 import { useIsMobile, sliderCss, mobileCss, ValidationModal, HoneypotField, SSNField, Field, MoneySliderField, NumSliderField, StateSelect, Select, Textarea, Row } from "./ui";
 import { TopBar, AgentCard, AgentFooter, Footer, Toast, StepBar, SH } from "./brand";
+import { AddressField } from "./places";
 
 let _agentData = null;
 let _email = (() => { try { return sessionStorage.getItem("btc_email") || ""; } catch (e) { return ""; } })();
@@ -42,6 +43,16 @@ export default function App() {
 
   const upBiz = (k, v) => { setBiz(p => ({ ...p, [k]: v })); setHasError(false); };
   const upOwner = (idx, k, v) => { setOwners(p => p.map((o, i) => i === idx ? { ...o, [k]: v } : o)); setHasError(false); };
+
+  // Google Places auto-fill: given parsed place parts, fill adjacent city/state/zip.
+  const applyBizPlace = (p) => {
+    setBiz(prev => ({ ...prev, address: p.address || prev.address, city: p.city || prev.city, state: p.state && STATES.includes(p.state) ? p.state : prev.state, zip: p.zip || prev.zip }));
+    setHasError(false);
+  };
+  const applyOwnerPlace = (idx, p) => {
+    setOwners(prev => prev.map((o, i) => i === idx ? { ...o, address: p.address || o.address, city: p.city || o.city, state: p.state && STATES.includes(p.state) ? p.state : o.state, zip: p.zip || o.zip } : o));
+    setHasError(false);
+  };
 
   const goTo = n => {
     if (n === step || anim) return;
@@ -221,22 +232,25 @@ export default function App() {
     setBankErrors("");
   };
 
+  // Binary multipart upload — no base64 overhead, sends real file objects via FormData
   const handleBankSubmit = async () => {
     const missing = bankFiles.slice(0, requiredBankCount).filter(f => !f).length;
     if (missing > 0) { setBankErrors(`First ${requiredBankCount} months are required`); return; }
-    setBankErrors(""); setBankUploading(true); setUploadProgress("Converting files...");
+    setBankErrors(""); setBankUploading(true); setUploadProgress("Preparing upload...");
     try {
-      const filesData = [];
       const validFiles = bankFiles.filter(f => f);
-      for (let i = 0; i < validFiles.length; i++) {
-        setUploadProgress(`Processing ${i + 1} of ${validFiles.length}...`);
-        const file = validFiles[i];
-        const base64 = await fileToBase64(file);
-        filesData.push({ name: file.name, type: file.type, size: file.size, data: base64 });
-      }
+      const fd = new FormData();
+      fd.append("event", "bank_statements_uploaded");
+      fd.append("step", "bank_upload");
+      fd.append("email", _email || "");
+      fd.append("timestamp", new Date().toISOString());
+      const agentParam = getParam("agent");
+      if (agentParam) { fd.append("agent_param", agentParam); fd.append("slug", agentParam); }
+      if (_agentData) fd.append("agent_info", JSON.stringify(_agentData));
+      fd.append("total_files", String(validFiles.length));
+      validFiles.forEach((file, i) => { fd.append(`file_${i}`, file, file.name); });
       setUploadProgress("Uploading...");
-      await fetch(WEBHOOK, { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ event: "bank_statements_uploaded", step: "bank_upload", email: _email, timestamp: new Date().toISOString(), agent_param: getParam("agent") || undefined, slug: getParam("agent") || undefined, agent_info: _agentData || undefined, total_files: filesData.length, files: filesData }) });
+      await fetch(WEBHOOK, { method: "POST", body: fd });
       setUploadProgress(""); setBankUploading(false); setPage("thanks");
     } catch (e) { setUploadProgress(""); setBankUploading(false); setBankErrors("Upload failed. Please try again."); }
   };
@@ -424,7 +438,7 @@ export default function App() {
                 <Row><MoneySliderField label="Amount Requested" value={biz.amountRequested} onChange={v => upBiz("amountRequested", v)} placeholder="$250,000" half required min={10000} max={5000000} step={10000} error={E} id="biz-amount" /><MoneySliderField label="Annual Revenue" value={biz.annualRevenue} onChange={v => upBiz("annualRevenue", v)} placeholder="$1,500,000" half required min={0} max={50000000} step={50000} error={E} id="biz-revenue" /></Row>
                 <Row><Select label="Use of Proceeds" value={biz.useOfProceeds} onChange={v => upBiz("useOfProceeds", v)} options={PROCEEDS_OPTS} required error={E} id="biz-proceeds" /></Row>
                 <Row><Select label="Product Interest" value={biz.product} onChange={v => upBiz("product", v)} options={PRODUCT_OPTS} required error={E} id="biz-product" /></Row>
-                <Row><Field label="Business Address" value={biz.address} onChange={v => upBiz("address", v)} placeholder="123 Main Street" required error={E} id="biz-address" /></Row>
+                <Row><AddressField label="Business Address" value={biz.address} onChange={v => upBiz("address", v)} onPlaceSelect={applyBizPlace} placeholder="123 Main Street" required error={E} id="biz-address" /></Row>
                 <Row><Field label="City" value={biz.city} onChange={v => upBiz("city", v)} placeholder="San Francisco" half required error={E} id="biz-city" /><StateSelect value={biz.state} onChange={v => upBiz("state", v)} half required error={E} id="biz-state" /></Row>
                 <Row><Field label="ZIP" value={biz.zip} onChange={v => upBiz("zip", v)} placeholder="94102" half required fmt={fmtZip} raw={v => v} error={E} id="biz-zip" /><Field label="Website" value={biz.website} onChange={v => upBiz("website", v)} placeholder="https://acmecorp.com" half /></Row>
                 <Row><Field label="Phone Number" value={biz.phone} onChange={v => upBiz("phone", v)} placeholder="(516) 878-8873" half required fmt={fmtPhone} raw={v => v} error={E} id="biz-phone" /><Select label="Own Real Estate?" value={biz.ownRealEstate} onChange={v => upBiz("ownRealEstate", v)} options={YES_NO} half /></Row>
@@ -449,7 +463,7 @@ export default function App() {
                       <Row><Field label="First Name" value={o.firstName} onChange={v => upOwner(idx, "firstName", v)} placeholder="John" half required error={E} id={`own${idx}-fn`} /><Field label="Last Name" value={o.lastName} onChange={v => upOwner(idx, "lastName", v)} placeholder="Smith" half required error={E} id={`own${idx}-ln`} /></Row>
                       <Row><Field label="Date of Birth" value={o.dob} onChange={v => { upOwner(idx, "dob", v); checkBirthday(v); }} type="date" half required error={E} id={`own${idx}-dob`} /><SSNField label="SSN" value={o.ssn} onChange={v => upOwner(idx, "ssn", v)} half required error={E} id={`own${idx}-ssn`} /></Row>
                       <Row><NumSliderField label="% Ownership" value={o.ownership} onChange={v => upOwner(idx, "ownership", v)} placeholder="60" half required min={1} max={100} suffix="%" error={E} id={`own${idx}-own`} /><NumSliderField label="Credit Score" value={o.creditScore} onChange={v => upOwner(idx, "creditScore", v)} placeholder="720" half min={300} max={850} /></Row>
-                      <Row><Field label="Address" value={o.address} onChange={v => upOwner(idx, "address", v)} placeholder="456 Oak Avenue" required error={E} id={`own${idx}-addr`} /></Row>
+                      <Row><AddressField label="Address" value={o.address} onChange={v => upOwner(idx, "address", v)} onPlaceSelect={p => applyOwnerPlace(idx, p)} placeholder="456 Oak Avenue" required error={E} id={`own${idx}-addr`} /></Row>
                       <Row><Field label="City" value={o.city} onChange={v => upOwner(idx, "city", v)} placeholder="San Francisco" half required error={E} id={`own${idx}-city`} /><StateSelect value={o.state} onChange={v => upOwner(idx, "state", v)} half required error={E} id={`own${idx}-state`} /></Row>
                       <Row><Field label="ZIP" value={o.zip} onChange={v => upOwner(idx, "zip", v)} placeholder="94102" half required fmt={fmtZip} raw={v => v} error={E} id={`own${idx}-zip`} /><Field label="Email" value={o.email} onChange={v => handleOwnerEmail(idx, v)} type="email" placeholder="john@acmecorp.com" half required error={E} id={`own${idx}-email`} /></Row>
                       <Row><Field label="Cell" value={o.cell} onChange={v => upOwner(idx, "cell", v)} placeholder="(516) 878-8873" fmt={fmtPhone} raw={v => v} /></Row>
