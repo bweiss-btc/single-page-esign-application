@@ -37,6 +37,27 @@ function setSecurityHeaders(res) {
   res.setHeader('Strict-Transport-Security', 'max-age=63072000; includeSubDomains; preload');
 }
 
+// Cache template field names for a short window to avoid fetching on every submission.
+let _templateFieldsCache = null;
+let _templateFieldsCacheAt = 0;
+const TEMPLATE_CACHE_MS = 5 * 60 * 1000;
+async function getTemplateFieldNames(baseEndpoint, templateId, apiKey) {
+  const now = Date.now();
+  if (_templateFieldsCache && now - _templateFieldsCacheAt < TEMPLATE_CACHE_MS) return _templateFieldsCache;
+  try {
+    const res = await fetch(baseEndpoint + "/api/templates/" + templateId, { headers: { "X-Auth-Token": apiKey } });
+    if (!res.ok) return null;
+    const tpl = await res.json();
+    const raw = tpl.fields || tpl.schema || [];
+    if (!Array.isArray(raw) || raw.length === 0) return null;
+    const names = new Set(raw.map(f => f && (f.name || f.label)).filter(Boolean));
+    if (names.size === 0) return null;
+    _templateFieldsCache = names;
+    _templateFieldsCacheAt = now;
+    return names;
+  } catch (e) { return null; }
+}
+
 export default async function handler(req, res) {
   setSecurityHeaders(res);
   const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.headers['x-real-ip'] || 'unknown';
@@ -117,10 +138,17 @@ export default async function handler(req, res) {
       fields.push({ name: "Owner 2 Signature Date", default_value: today, readonly: true });
     }
 
-    const redirectUrl = APP_URL + "/?signed=true";
+    // Filter fields to only those present on the DocuSeal template. Without this filter, any
+    // field we push that isn't defined on the template (e.g. "Owner 2 First Name" when the
+    // template only has Owner 1 slots) causes DocuSeal to reject the entire submission.
+    let safeFields = fields;
+    const known = await getTemplateFieldNames(DOCUSEAL_BASE_ENDPOINT, DOCUSEAL_TEMPLATE_ID, DOCUSEAL_API_KEY);
+    if (known && known.size > 0) safeFields = fields.filter(f => known.has(f.name));
+
+    const redirectUrl = APP_URL + "/?signed=true" + (slug ? "&agent=" + encodeURIComponent(slug) : "");
     const response = await fetch(DOCUSEAL_BASE_ENDPOINT + "/api/submissions", {
       method: "POST", headers: { "X-Auth-Token": DOCUSEAL_API_KEY, "Content-Type": "application/json" },
-      body: JSON.stringify({ template_id: parseInt(DOCUSEAL_TEMPLATE_ID), send_email: false, completed_redirect_url: redirectUrl, metadata: { slug: slug || null, agent_info: agent_info || null }, submitters: [{ email: ownerEmail || "applicant@example.com", role: "Owner 1", fields, completed_redirect_url: redirectUrl, metadata: { slug: slug || null, agent_info: agent_info || null } }] })
+      body: JSON.stringify({ template_id: parseInt(DOCUSEAL_TEMPLATE_ID), send_email: false, completed_redirect_url: redirectUrl, metadata: { slug: slug || null, agent_info: agent_info || null }, submitters: [{ email: ownerEmail || "applicant@example.com", role: "Owner 1", fields: safeFields, completed_redirect_url: redirectUrl, metadata: { slug: slug || null, agent_info: agent_info || null } }] })
     });
 
     const responseText = await response.text();
