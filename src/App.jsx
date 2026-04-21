@@ -44,13 +44,13 @@ export default function App() {
   const upBiz = (k, v) => { setBiz(p => ({ ...p, [k]: v })); setHasError(false); };
   const upOwner = (idx, k, v) => { setOwners(p => p.map((o, i) => i === idx ? { ...o, [k]: v } : o)); setHasError(false); };
 
-  // Google Places auto-fill: given parsed place parts, fill adjacent city/state/zip.
+  // Google Places selection handlers — fill adjacent city/state/zip in one shot.
   const applyBizPlace = (p) => {
-    setBiz(prev => ({ ...prev, address: p.address || prev.address, city: p.city || prev.city, state: p.state && STATES.includes(p.state) ? p.state : prev.state, zip: p.zip || prev.zip }));
+    setBiz(prev => ({ ...prev, address: p.address || prev.address, city: p.city || prev.city, state: STATES.includes(p.state) ? p.state : prev.state, zip: p.zip || prev.zip }));
     setHasError(false);
   };
   const applyOwnerPlace = (idx, p) => {
-    setOwners(prev => prev.map((o, i) => i === idx ? { ...o, address: p.address || o.address, city: p.city || o.city, state: p.state && STATES.includes(p.state) ? p.state : o.state, zip: p.zip || o.zip } : o));
+    setOwners(prev => prev.map((o, i) => i === idx ? { ...o, address: p.address || o.address, city: p.city || o.city, state: STATES.includes(p.state) ? p.state : o.state, zip: p.zip || o.zip } : o));
     setHasError(false);
   };
 
@@ -115,6 +115,10 @@ export default function App() {
       if (!o.zip || o.zip.length !== 5) m.push({ id: `own${i}-zip`, label: `${p}: ZIP`, hint: "Must be 5 digits" });
       if (!o.email || !o.email.includes("@")) m.push({ id: `own${i}-email`, label: `${p}: Email`, hint: "Must contain @" });
     });
+    if (owners.length === 2) {
+      const total = (Number(owners[0].ownership) || 0) + (Number(owners[1].ownership) || 0);
+      if (total !== 100) m.push({ id: "own1-own", label: "Ownership must total 100%", hint: `Primary + Secondary currently total ${total}%. Adjust so they add to exactly 100%.` });
+    }
     if (m.length > 0) { setHasError(true); setModal(m); scrollToError(); return false; }
     setHasError(false); return true;
   };
@@ -232,11 +236,13 @@ export default function App() {
     setBankErrors("");
   };
 
-  // Binary multipart upload — no base64 overhead, sends real file objects via FormData
+  // Bank upload submit — uses multipart/form-data so files are sent as binary attachments
+  // rather than base64-encoded JSON. n8n receiver must parse multipart (Webhook node with
+  // "Binary Data" option enabled, or a Move Binary Data step).
   const handleBankSubmit = async () => {
     const missing = bankFiles.slice(0, requiredBankCount).filter(f => !f).length;
     if (missing > 0) { setBankErrors(`First ${requiredBankCount} months are required`); return; }
-    setBankErrors(""); setBankUploading(true); setUploadProgress("Preparing upload...");
+    setBankErrors(""); setBankUploading(true); setUploadProgress("Uploading...");
     try {
       const validFiles = bankFiles.filter(f => f);
       const fd = new FormData();
@@ -249,8 +255,8 @@ export default function App() {
       if (_agentData) fd.append("agent_info", JSON.stringify(_agentData));
       fd.append("total_files", String(validFiles.length));
       validFiles.forEach((file, i) => { fd.append(`file_${i}`, file, file.name); });
-      setUploadProgress("Uploading...");
-      await fetch(WEBHOOK, { method: "POST", body: fd });
+      const res = await fetch(WEBHOOK, { method: "POST", body: fd });
+      if (!res.ok) throw new Error("Upload failed: " + res.status);
       setUploadProgress(""); setBankUploading(false); setPage("thanks");
     } catch (e) { setUploadProgress(""); setBankUploading(false); setBankErrors("Upload failed. Please try again."); }
   };
@@ -463,7 +469,7 @@ export default function App() {
                       <Row><Field label="First Name" value={o.firstName} onChange={v => upOwner(idx, "firstName", v)} placeholder="John" half required error={E} id={`own${idx}-fn`} /><Field label="Last Name" value={o.lastName} onChange={v => upOwner(idx, "lastName", v)} placeholder="Smith" half required error={E} id={`own${idx}-ln`} /></Row>
                       <Row><Field label="Date of Birth" value={o.dob} onChange={v => { upOwner(idx, "dob", v); checkBirthday(v); }} type="date" half required error={E} id={`own${idx}-dob`} /><SSNField label="SSN" value={o.ssn} onChange={v => upOwner(idx, "ssn", v)} half required error={E} id={`own${idx}-ssn`} /></Row>
                       <Row><NumSliderField label="% Ownership" value={o.ownership} onChange={v => upOwner(idx, "ownership", v)} placeholder="60" half required min={1} max={100} suffix="%" error={E} id={`own${idx}-own`} /><NumSliderField label="Credit Score" value={o.creditScore} onChange={v => upOwner(idx, "creditScore", v)} placeholder="720" half min={300} max={850} /></Row>
-                      <Row><AddressField label="Address" value={o.address} onChange={v => upOwner(idx, "address", v)} onPlaceSelect={p => applyOwnerPlace(idx, p)} placeholder="456 Oak Avenue" required error={E} id={`own${idx}-addr`} /></Row>
+                      <Row><AddressField label="Address" value={o.address} onChange={v => upOwner(idx, "address", v)} onPlaceSelect={(p) => applyOwnerPlace(idx, p)} placeholder="456 Oak Avenue" required error={E} id={`own${idx}-addr`} /></Row>
                       <Row><Field label="City" value={o.city} onChange={v => upOwner(idx, "city", v)} placeholder="San Francisco" half required error={E} id={`own${idx}-city`} /><StateSelect value={o.state} onChange={v => upOwner(idx, "state", v)} half required error={E} id={`own${idx}-state`} /></Row>
                       <Row><Field label="ZIP" value={o.zip} onChange={v => upOwner(idx, "zip", v)} placeholder="94102" half required fmt={fmtZip} raw={v => v} error={E} id={`own${idx}-zip`} /><Field label="Email" value={o.email} onChange={v => handleOwnerEmail(idx, v)} type="email" placeholder="john@acmecorp.com" half required error={E} id={`own${idx}-email`} /></Row>
                       <Row><Field label="Cell" value={o.cell} onChange={v => upOwner(idx, "cell", v)} placeholder="(516) 878-8873" fmt={fmtPhone} raw={v => v} /></Row>
@@ -471,7 +477,16 @@ export default function App() {
                     {idx < owners.length - 1 && <div style={{ borderBottom: "1px dashed #e2e8f0", margin: "24px 0" }} />}
                   </div>
                 ))}
-                <button onClick={() => setOwners(p => [...p, emptyOwner()])} style={{ width: "100%", marginTop: 20, padding: "12px", border: "2px dashed #c8d5db", borderRadius: 10, background: "#f8fbfc", color: NV2, fontSize: 13, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}><span style={{ fontSize: 16 }}>+</span> Add a Second Owner</button>
+                {owners.length < 2 && <button onClick={() => setOwners(p => [...p, emptyOwner()])} style={{ width: "100%", marginTop: 20, padding: "12px", border: "2px dashed #c8d5db", borderRadius: 10, background: "#f8fbfc", color: NV2, fontSize: 13, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}><span style={{ fontSize: 16 }}>+</span> Add a Second Owner</button>}
+              {owners.length === 2 && (() => {
+                const total = (Number(owners[0].ownership) || 0) + (Number(owners[1].ownership) || 0);
+                const ok = total === 100;
+                return (
+                  <div style={{ width: "100%", marginTop: 20, padding: "12px 16px", borderRadius: 10, background: ok ? "#f0fdf4" : "#fef3c7", border: "1px solid " + (ok ? "#86efac" : "#fcd34d"), fontSize: 13, fontWeight: 700, color: ok ? "#166534" : "#92400e", textAlign: "center" }}>
+                    Combined ownership: {total}% {ok ? "\u2713" : "(must equal 100%)"}
+                  </div>
+                );
+              })()}
               </div>
             </div>
           )}
