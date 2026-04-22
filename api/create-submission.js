@@ -1,4 +1,5 @@
 const AGENT_WEBHOOK = "https://n8n.bigthinkcapital.com/webhook/94fb281b-d231-4646-8245-bf768b6dbb89";
+const LOOKUP_WEBHOOK = "https://n8n.bigthinkcapital.com/webhook/e41ebca9-5f6c-49b2-af2c-cd4299edf4ytd";
 const MAIN_WEBHOOK = "https://n8n.bigthinkcapital.com/webhook/ec9ccd01-c951-42b3-ac51-27a3077f6648";
 const APP_URL = "https://application.bigthinkcapital.com";
 
@@ -37,8 +38,6 @@ function setSecurityHeaders(res) {
   res.setHeader('Strict-Transport-Security', 'max-age=63072000; includeSubDomains; preload');
 }
 
-// Scrub fields that shouldn't persist in DocuSeal's metadata store. Keep identifiers and
-// business context; drop raw SSNs so they don't sit in DocuSeal logs.
 function scrubForMetadata(submissionSnapshot) {
   const s = JSON.parse(JSON.stringify(submissionSnapshot || {}));
   if (Array.isArray(s.owners)) {
@@ -79,6 +78,25 @@ export default async function handler(req, res) {
   }
 
   if (req.method === "GET") {
+    // Email lookup proxy. The browser can't call LOOKUP_WEBHOOK directly because the
+    // n8n response (or a reverse proxy in front of n8n) returns a fixed
+    // Access-Control-Allow-Origin of offers.bigthinkcapital.com, which breaks CORS for
+    // application.bigthinkcapital.com. Routing through this serverless function makes
+    // the call server-to-server, bypassing CORS entirely.
+    if (req.query.lookup === "email" && req.query.email) {
+      try {
+        const cleanEmail = sanitize(String(req.query.email));
+        const cleanSlug = req.query.slug ? sanitize(String(req.query.slug)) : "";
+        const qs = "?email=" + encodeURIComponent(cleanEmail) + (cleanSlug ? "&slug=" + encodeURIComponent(cleanSlug) : "");
+        const response = await fetch(LOOKUP_WEBHOOK + qs);
+        const text = await response.text();
+        let data;
+        try { data = JSON.parse(text); } catch(e) { return res.status(200).json({}); }
+        return res.status(200).json(data || {});
+      } catch (error) { return res.status(200).json({}); }
+    }
+
+    // Agent lookup (existing behavior).
     const { agent } = req.query;
     if (!agent) return res.status(400).json({ error: "Missing agent parameter" });
     try {
@@ -93,13 +111,10 @@ export default async function handler(req, res) {
   if (req.method === "POST" && req.query.source === "docuseal") {
     try {
       const payload = req.body || {};
-      // DocuSeal sends either { event_type, data: {...} } or the submission object directly.
       const submissionData = payload.data || payload;
       const allSubmitters = submissionData.submitters || [];
       const firstSubmitter = allSubmitters[0] || {};
 
-      // Build a normalized signing-log summary for every submitter on the submission, so
-      // n8n can see who signed when, from what IP, and get per-signer audit info in one place.
       const signingLog = allSubmitters.map(s => ({
         role: s.role || null,
         email: s.email || null,
@@ -116,7 +131,6 @@ export default async function handler(req, res) {
         fields: Array.isArray(s.fields) ? s.fields.reduce((acc, f) => { if (f && f.name) acc[f.name] = f.value; return acc; }, {}) : {}
       }));
 
-      // Aggregate documents from submission + every submitter (deduped by URL).
       const documents = [];
       const seenDocUrls = new Set();
       const addDoc = (d) => {
@@ -128,13 +142,11 @@ export default async function handler(req, res) {
       if (Array.isArray(submissionData.documents)) submissionData.documents.forEach(addDoc);
       allSubmitters.forEach(s => { if (Array.isArray(s.documents)) s.documents.forEach(addDoc); });
 
-      // Fields on the completion event come from whichever submitter triggered the callback.
       const completedFields = {};
       if (firstSubmitter.fields && Array.isArray(firstSubmitter.fields)) {
         for (const f of firstSubmitter.fields) completedFields[f.name] = f.value;
       }
 
-      // Metadata echoes back verbatim from what we stored at submission-creation time.
       const metadata = submissionData.metadata || firstSubmitter.metadata || {};
       let parsedMetadata = metadata;
       if (typeof metadata === 'string') { try { parsedMetadata = JSON.parse(metadata); } catch(e) { parsedMetadata = {}; } }
@@ -150,15 +162,11 @@ export default async function handler(req, res) {
           step: "docuseal_completed",
           docuseal_event: payload.event_type || "submission.completed",
           timestamp: new Date().toISOString(),
-
-          // ── Submission identifiers
           submission_id: submissionData.id || null,
           submission_created_at: submissionData.created_at || null,
           submission_completed_at: submissionData.completed_at || firstSubmitter.completed_at || null,
           audit_log_url: submissionData.audit_log_url || submissionData.audit_url || null,
           combined_document_url: submissionData.combined_document_url || null,
-
-          // ── Current signer (the one that triggered this callback)
           submitter_email: firstSubmitter.email || null,
           submitter_role: firstSubmitter.role || null,
           submitter_name: firstSubmitter.name || null,
@@ -166,30 +174,35 @@ export default async function handler(req, res) {
           submitter_user_agent: firstSubmitter.ua || firstSubmitter.user_agent || null,
           submitter_completed_at: firstSubmitter.completed_at || null,
           status: firstSubmitter.status || "completed",
-
-          // ── Full signing log (all submitters including Owner 1 + Owner 2)
           signing_log: signingLog,
-
-          // ── Signed documents (all signed PDFs + audit trail)
           signed_documents: documents,
-
-          // ── Field values on the signed doc
           fields: completedFields,
-
-          // ── Original application snapshot (stashed in DocuSeal metadata at creation time)
           slug: callbackSlug,
           agent_param: callbackSlug,
           agent_info: callbackAgentInfo,
           email: callbackEmail,
           business: callbackBusiness,
           owners: callbackOwners,
-
-          // ── Raw DocuSeal payload for anything we didn't explicitly unpack
           raw_payload: payload
         })
       });
       return res.status(200).json({ success: true });
     } catch (error) { return res.status(200).json({ success: false }); }
+  }
+
+  // Generic webhook proxy. Forwards any JSON payload to MAIN_WEBHOOK server-to-server,
+  // so the browser doesn't hit CORS. Triggered by ?proxy=webhook on POST.
+  if (req.method === "POST" && req.query.proxy === "webhook") {
+    try {
+      await fetch(MAIN_WEBHOOK, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(req.body || {})
+      });
+      return res.status(200).json({ success: true });
+    } catch (error) {
+      return res.status(200).json({ success: false });
+    }
   }
 
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
@@ -240,8 +253,6 @@ export default async function handler(req, res) {
 
     const redirectUrl = APP_URL + "/?signed=true" + (slug ? "&agent=" + encodeURIComponent(slug) : "");
 
-    // Application snapshot sent into DocuSeal metadata so it echoes back in the completion
-    // callback. Keeps application_signed self-contained — n8n doesn't need to match events.
     const snapshotMetadata = {
       slug: slug || null,
       agent_info: agent_info || null,
