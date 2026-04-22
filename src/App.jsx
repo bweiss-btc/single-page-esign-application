@@ -27,7 +27,7 @@ export default function App() {
   const [docLoading, setDocLoading] = useState(false);
   const [docError, setDocError] = useState(null);
   const [page, setPage] = useState(isSigned ? "bank" : "form");
-  const [bankFiles, setBankFiles] = useState([null, null, null, null]);
+  const [bankFiles, setBankFiles] = useState([null, null, null]);
   const [bankUploading, setBankUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState("");
   const [agent, setAgent] = useState(null);
@@ -152,9 +152,8 @@ export default function App() {
     try {
       const agentParam = getParam("agent");
       const slugQ = agentParam ? "&slug=" + encodeURIComponent(agentParam) : "";
-      // Email lookup now goes through Vercel proxy (server-to-server) to bypass the
-      // Access-Control-Allow-Origin:https://offers.bigthinkcapital.com header that
-      // either n8n env var or reverse proxy is sending.
+      // Email lookup via Vercel proxy (server-to-server) to bypass the CORS header that
+      // n8n / its reverse proxy sends (Access-Control-Allow-Origin:https://offers...).
       const res = await fetch("/api/create-submission?lookup=email&email=" + encodeURIComponent(email) + slugQ);
       const d = await res.json();
       const data = Array.isArray(d) ? d[0] : d;
@@ -220,7 +219,7 @@ export default function App() {
   };
 
   const addBankSlot = () => setBankFiles(p => [...p, null]);
-  const requiredBankCount = 4;
+  const requiredBankCount = 3;
 
   const handleBankFileInput = (i, fileList) => {
     const files = Array.from(fileList);
@@ -238,9 +237,12 @@ export default function App() {
     setBankErrors("");
   };
 
-  // Bank upload still targets WEBHOOK directly (multipart/form-data). If this fails with
-  // CORS, we'll need a separate multipart proxy endpoint since the JSON proxy can't
-  // forward FormData cleanly.
+  // Bank upload routes through /api/upload-bank (Vercel multipart proxy). Posting
+  // directly to the n8n webhook from the browser hits the same CORS block that the
+  // JSON endpoints had — which also causes the binary payload to fail to transmit
+  // (preflight rejection before the body bytes arrive). The proxy forwards the raw
+  // multipart body + content-type header byte-for-byte to n8n, preserving the
+  // boundary and file data exactly.
   const handleBankSubmit = async () => {
     const missing = bankFiles.slice(0, requiredBankCount).filter(f => !f).length;
     if (missing > 0) { setBankErrors(`First ${requiredBankCount} months are required`); return; }
@@ -257,10 +259,17 @@ export default function App() {
       if (_agentData) fd.append("agent_info", JSON.stringify(_agentData));
       fd.append("total_files", String(validFiles.length));
       validFiles.forEach((file, i) => { fd.append(`file_${i}`, file, file.name); });
-      const res = await fetch(WEBHOOK, { method: "POST", body: fd });
-      if (!res.ok) throw new Error("Upload failed: " + res.status);
+      const res = await fetch("/api/upload-bank", { method: "POST", body: fd });
+      if (!res.ok) {
+        let msg = "Upload failed: " + res.status;
+        try { const j = await res.json(); if (j && j.error) msg = j.error; } catch(e) {}
+        throw new Error(msg);
+      }
       setUploadProgress(""); setBankUploading(false); setPage("thanks");
-    } catch (e) { setUploadProgress(""); setBankUploading(false); setBankErrors("Upload failed. Please try again."); }
+    } catch (e) {
+      setUploadProgress(""); setBankUploading(false);
+      setBankErrors(e && e.message ? e.message : "Upload failed. Please try again.");
+    }
   };
 
   const slideStyle = { opacity: anim ? 0 : 1, transform: anim ? `translateY(${dir * 20}px)` : "translateY(0)", transition: "all 0.3s cubic-bezier(0.4,0,0.2,1)" };
@@ -276,11 +285,11 @@ export default function App() {
         <TopBar />
         <div style={{ maxWidth: 680, margin: "0 auto", padding: "24px 12px 0" }}>
           <div className="form-card" style={{ background: "#fff", borderRadius: 16, overflow: "hidden", boxShadow: "0 1px 3px rgba(0,0,0,0.05),0 8px 30px rgba(0,0,0,0.06)" }}>
-            <SH title="Upload Bank Statements" subtitle="Please upload your last 4 months of business bank statements" />
+            <SH title="Upload Bank Statements" subtitle="Please upload your last 3 months of business bank statements" />
             <div className="form-pad" style={{ padding: "20px 24px 24px", display: "flex", flexDirection: "column", gap: 14 }}>
               {bankFiles.map((f, i) => {
                 const isReq = i < requiredBankCount;
-                const label = i < requiredBankCount ? (i === 0 ? `${monthNames[0]} (Most Recent)` : monthNames[i]) : `Additional Doc ${i - 3}`;
+                const label = i < requiredBankCount ? (i === 0 ? `${monthNames[0]} (Most Recent)` : monthNames[i]) : `Additional Doc ${i - 2}`;
                 return (
                   <div key={i}>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 5 }}>
