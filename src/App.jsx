@@ -290,7 +290,7 @@ export default function App() {
     return (
       <div style={{ minHeight: "100vh", background: "#f1f5f9", fontFamily: "'Plus Jakarta Sans',sans-serif", ...bottomPad }}>
         <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-        <style>{`@keyframes spin{to{transform:rotate(360deg);}}${mobileCss}`}</style>
+        <style>{`@keyframes spin{to{transform:rotate(360deg);}}@keyframes pulseGlow{0%,100%{box-shadow:0 0 0 0 rgba(30,73,118,0.18);}50%{box-shadow:0 0 0 6px rgba(30,73,118,0);}}.add-doc-btn:hover{background:#e3eff6 !important;border-color:${NV1} !important;transform:translateY(-1px);}.add-doc-btn:hover .add-doc-plus{transform:rotate(90deg);}${mobileCss}`}</style>
         <TopBar />
         <div style={{ maxWidth: 680, margin: "0 auto", padding: "24px 12px 0" }}>
           <div className="form-card" style={{ background: "#fff", borderRadius: 16, overflow: "hidden", boxShadow: "0 1px 3px rgba(0,0,0,0.05),0 8px 30px rgba(0,0,0,0.06)" }}>
@@ -312,8 +312,14 @@ export default function App() {
                   </div>
                 );
               })}
-              <p style={{ fontSize: 11, color: "#94a3b8", margin: "0 0 -6px", textAlign: "center" }}>Tip: Click the first slot to upload multiple statements at once</p>
-              <button onClick={addBankSlot} style={{ width: "100%", padding: "11px", border: "2px dashed #c8d5db", borderRadius: 10, background: "#f8fbfc", color: NV2, fontSize: 12, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}><span style={{ fontSize: 15 }}>+</span> Add Additional Document</button>
+              <p style={{ fontSize: 11, color: "#94a3b8", margin: "0 0 -4px", textAlign: "center" }}>Tip: Click the first slot to upload multiple statements at once</p>
+              <button className="add-doc-btn" onClick={addBankSlot} style={{ width: "100%", marginTop: 4, padding: "18px 20px", border: "2px dashed " + NV2, borderRadius: 14, background: "#eef5fa", color: NV1, fontSize: 14.5, fontWeight: 800, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 12, transition: "all 0.18s ease", letterSpacing: "0.01em" }}>
+                <div className="add-doc-plus" style={{ width: 32, height: 32, borderRadius: "50%", background: `linear-gradient(135deg,${NV1},${NV2})`, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, fontWeight: 700, flexShrink: 0, lineHeight: 1, boxShadow: "0 2px 8px rgba(10,25,41,0.22)", animation: "pulseGlow 2.4s ease-in-out infinite", transition: "transform 0.25s ease" }}>+</div>
+                <span style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 2 }}>
+                  <span style={{ lineHeight: 1.2 }}>Add Another Document</span>
+                  <span style={{ fontSize: 11, fontWeight: 500, color: "#64748b", letterSpacing: 0 }}>Upload additional statements or supporting docs</span>
+                </span>
+              </button>
               {bankErrors && <p style={errStyle}>{bankErrors}</p>}
               <button onClick={handleBankSubmit} disabled={bankUploading} style={{ width: "100%", padding: "13px", borderRadius: 12, border: "none", background: btnGrad, color: "#fff", fontSize: 14, fontWeight: 700, cursor: bankUploading ? "not-allowed" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>{bankUploading ? <><div style={{ width: 16, height: 16, border: "2px solid rgba(255,255,255,0.3)", borderTopColor: "#fff", borderRadius: "50%", animation: "spin 0.7s linear infinite" }} />{uploadProgress}</> : "Submit Bank Statements"}</button>
             </div>
