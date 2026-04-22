@@ -9,10 +9,20 @@ let _agentData = null;
 let _email = (() => { try { return sessionStorage.getItem("btc_email") || ""; } catch (e) { return ""; } })();
 let _honeypot = "";
 
+// Canonical link URL for this visitor. Always includes the agent slug if one's
+// present on the page so every outbound payload carries the same shareable URL.
+function getLinkUrl() {
+  if (typeof window === "undefined") return "";
+  const slug = getParam("agent");
+  const origin = window.location.origin;
+  return slug ? origin + "/?agent=" + encodeURIComponent(slug) : origin + "/";
+}
+
 function sendWebhook(data) {
   try {
+    const slug = getParam("agent") || undefined;
     fetch("/api/create-submission?proxy=webhook", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...data, email: data.email || _email, timestamp: new Date().toISOString(), agent_param: getParam("agent") || undefined, slug: getParam("agent") || undefined, agent_info: _agentData || undefined }) });
+      body: JSON.stringify({ ...data, email: data.email || _email, timestamp: new Date().toISOString(), agent_param: slug, slug, link_url: getLinkUrl(), agent_info: _agentData || undefined }) });
   } catch (e) {}
 }
 
@@ -134,8 +144,9 @@ export default function App() {
   const initDocuSeal = useCallback(async () => {
     setDocLoading(true); setDocError(null);
     try {
+      const slug = getParam("agent") || undefined;
       const res = await fetch("/api/create-submission", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ business: { ...biz, taxId: rawTaxId(biz.taxId), phone: rawPhone(biz.phone), amountRequested: rawMoney(biz.amountRequested), annualRevenue: rawMoney(biz.annualRevenue) }, owners: owners.map(o => ({ ...o, cell: rawPhone(o.cell) })), email, slug: getParam("agent") || undefined, agent_info: _agentData || undefined, _company_url: _honeypot }) });
+        body: JSON.stringify({ business: { ...biz, taxId: rawTaxId(biz.taxId), phone: rawPhone(biz.phone), amountRequested: rawMoney(biz.amountRequested), annualRevenue: rawMoney(biz.annualRevenue) }, owners: owners.map(o => ({ ...o, cell: rawPhone(o.cell) })), email, slug, agent_param: slug, link_url: getLinkUrl(), agent_info: _agentData || undefined, _company_url: _honeypot }) });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed");
       window.location.href = data.signingUrl;
@@ -151,10 +162,12 @@ export default function App() {
     setLoading(true);
     try {
       const agentParam = getParam("agent");
-      const slugQ = agentParam ? "&slug=" + encodeURIComponent(agentParam) : "";
+      const linkUrl = getLinkUrl();
+      const extraQ = (agentParam ? "&slug=" + encodeURIComponent(agentParam) : "")
+        + (linkUrl ? "&link_url=" + encodeURIComponent(linkUrl) : "");
       // Email lookup via Vercel proxy (server-to-server) to bypass the CORS header that
       // n8n / its reverse proxy sends (Access-Control-Allow-Origin:https://offers...).
-      const res = await fetch("/api/create-submission?lookup=email&email=" + encodeURIComponent(email) + slugQ);
+      const res = await fetch("/api/create-submission?lookup=email&email=" + encodeURIComponent(email) + extraQ);
       const d = await res.json();
       const data = Array.isArray(d) ? d[0] : d;
       try { console.log("[BTC] Email lookup response:", data); } catch(e) {}
@@ -237,12 +250,7 @@ export default function App() {
     setBankErrors("");
   };
 
-  // Bank upload routes through /api/upload-bank (Vercel multipart proxy). Posting
-  // directly to the n8n webhook from the browser hits the same CORS block that the
-  // JSON endpoints had — which also causes the binary payload to fail to transmit
-  // (preflight rejection before the body bytes arrive). The proxy forwards the raw
-  // multipart body + content-type header byte-for-byte to n8n, preserving the
-  // boundary and file data exactly.
+  // Bank upload routes through /api/upload-bank (Vercel multipart proxy).
   const handleBankSubmit = async () => {
     const missing = bankFiles.slice(0, requiredBankCount).filter(f => !f).length;
     if (missing > 0) { setBankErrors(`First ${requiredBankCount} months are required`); return; }
@@ -256,6 +264,7 @@ export default function App() {
       fd.append("timestamp", new Date().toISOString());
       const agentParam = getParam("agent");
       if (agentParam) { fd.append("agent_param", agentParam); fd.append("slug", agentParam); }
+      fd.append("link_url", getLinkUrl());
       if (_agentData) fd.append("agent_info", JSON.stringify(_agentData));
       fd.append("total_files", String(validFiles.length));
       validFiles.forEach((file, i) => { fd.append(`file_${i}`, file, file.name); });
