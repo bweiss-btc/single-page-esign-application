@@ -11,7 +11,7 @@ let _honeypot = "";
 
 function sendWebhook(data) {
   try {
-    fetch(WEBHOOK, { method: "POST", headers: { "Content-Type": "application/json" },
+    fetch("/api/create-submission?proxy=webhook", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ...data, email: data.email || _email, timestamp: new Date().toISOString(), agent_param: getParam("agent") || undefined, slug: getParam("agent") || undefined, agent_info: _agentData || undefined }) });
   } catch (e) {}
 }
@@ -44,7 +44,6 @@ export default function App() {
   const upBiz = (k, v) => { setBiz(p => ({ ...p, [k]: v })); setHasError(false); };
   const upOwner = (idx, k, v) => { setOwners(p => p.map((o, i) => i === idx ? { ...o, [k]: v } : o)); setHasError(false); };
 
-  // Google Places selection handlers — fill adjacent city/state/zip in one shot.
   const applyBizPlace = (p) => {
     setBiz(prev => ({ ...prev, address: p.address || prev.address, city: p.city || prev.city, state: STATES.includes(p.state) ? p.state : prev.state, zip: p.zip || prev.zip }));
     setHasError(false);
@@ -153,81 +152,64 @@ export default function App() {
     try {
       const agentParam = getParam("agent");
       const slugQ = agentParam ? "&slug=" + encodeURIComponent(agentParam) : "";
-      const res = await fetch(LOOKUP_WEBHOOK + "?email=" + encodeURIComponent(email) + slugQ);
+      // Email lookup now goes through Vercel proxy (server-to-server) to bypass the
+      // Access-Control-Allow-Origin:https://offers.bigthinkcapital.com header that
+      // either n8n env var or reverse proxy is sending.
+      const res = await fetch("/api/create-submission?lookup=email&email=" + encodeURIComponent(email) + slugQ);
       const d = await res.json();
       const data = Array.isArray(d) ? d[0] : d;
+      try { console.log("[BTC] Email lookup response:", data); } catch(e) {}
       if (data && data.found !== "false" && data.notFound !== true) {
-        // -------------------------
-        // Prefill business fields
-        //
-        // The n8n webhook returns camelCase keys (company, dba, entityType, ein,
-        // businessStartDate, amountRequested, useOfProceeds, product, ownRealEstate,
-        // openLoans, ownerOwnership, ownerHomeStreet, owner2FirstName, etc.).
-        //
-        // For each field, we try every plausible key the webhook might send — the
-        // current camelCase, any legacy Salesforce API name, and any alternative
-        // naming — so future changes in the webhook shape won't silently break
-        // prefill.
-        // -------------------------
         const nb = { ...biz };
-        nb.name = getVal(data, "company", "Company", "businessName") || nb.name;
-        nb.dba = getVal(data, "dba", "DBA_Name__c", "csbs__DBA__c") || nb.dba;
-        nb.startDate = getVal(data, "businessStartDate", "Business_Start_Date__c", "csbs__Business_Start_Date_Current_Ownership__c") || nb.startDate;
-        nb.entity = getVal(data, "entityType", "entity", "legalEntity", "Legal_Entity__c", "csbs__Entity_Type__c") || nb.entity;
+        nb.name = getVal(data, "name", "company", "Company", "businessName", "business_name", "Company_Name", "companyName") || nb.name;
+        nb.dba = getVal(data, "dba", "DBA", "DBA_Name__c", "dba_name", "dbaName", "csbs__DBA__c") || nb.dba;
+        nb.startDate = getVal(data, "startDate", "start_date", "businessStartDate", "business_start_date", "Business_Start_Date__c", "csbs__Business_Start_Date_Current_Ownership__c") || nb.startDate;
+        nb.entity = getVal(data, "entity", "entityType", "entity_type", "legalEntity", "legal_entity", "Legal_Entity__c", "csbs__Entity_Type__c") || nb.entity;
         nb.industry = getVal(data, "industry", "Industry") || nb.industry;
-        nb.taxId = getVal(data, "ein", "taxId", "Federal_Tax_Id__c", "EIN__c") || nb.taxId;
-        nb.description = getVal(data, "description", "Description") || nb.description;
-        nb.amountRequested = getVal(data, "amountRequested", "Amount_Requested__c", "csbs__Amount_Requested__c") || nb.amountRequested;
-        nb.annualRevenue = getVal(data, "annualRevenue", "Annual_Revenue__c", "AnnualRevenue", "Business_Income__c") || nb.annualRevenue;
-        nb.useOfProceeds = getVal(data, "useOfProceeds", "Use_of_Proceeds__c", "csbs__Use_of_Proceeds__c") || nb.useOfProceeds;
-        nb.product = getVal(data, "product", "Products_Interested_In__c", "Product_you_are_Interested_in__c", "Real_Estate_Loan_Type__c") || nb.product;
-        nb.address = getVal(data, "businessStreet", "Street", "businessAddress", "Real_Estate_Address__c") || nb.address;
-        nb.city = getVal(data, "businessCity", "City", "Real_Estate_City__c") || nb.city;
-        nb.state = getVal(data, "businessState", "State", "Real_Estate_State__c") || nb.state;
-        nb.zip = getVal(data, "businessZip", "PostalCode", "Real_Estate_Zip__c") || nb.zip;
-        nb.website = getVal(data, "website", "Website") || nb.website;
-        nb.phone = getVal(data, "businessPhone", "Phone", "phone") || nb.phone;
-        nb.ownRealEstate = getVal(data, "ownRealEstate", "ownsRealEstate", "Rent_or_Own__c", "Do_you_own_real_estate__c") || nb.ownRealEstate;
-        nb.openLoans = getVal(data, "openLoans", "hasOpenBusinessLoans", "Has_Open_Business_Loans__c", "Do_you_have_open_business_loans__c") || nb.openLoans;
+        nb.taxId = getVal(data, "taxId", "tax_id", "ein", "EIN", "Federal_Tax_Id__c", "EIN__c", "Tax_ID__c") || nb.taxId;
+        nb.description = getVal(data, "description", "Description", "businessDescription", "business_description") || nb.description;
+        nb.amountRequested = getVal(data, "amountRequested", "amount_requested", "amount", "Amount_Requested__c", "csbs__Amount_Requested__c") || nb.amountRequested;
+        nb.annualRevenue = getVal(data, "annualRevenue", "annual_revenue", "revenue", "Annual_Revenue__c", "AnnualRevenue", "Business_Income__c") || nb.annualRevenue;
+        nb.useOfProceeds = getVal(data, "useOfProceeds", "use_of_proceeds", "Use_of_Proceeds__c", "csbs__Use_of_Proceeds__c") || nb.useOfProceeds;
+        nb.product = getVal(data, "product", "productInterest", "product_interest", "Products_Interested_In__c", "Product_you_are_Interested_in__c", "Real_Estate_Loan_Type__c") || nb.product;
+        nb.address = getVal(data, "address", "businessAddress", "business_address", "businessStreet", "Street", "BillingStreet", "Real_Estate_Address__c") || nb.address;
+        nb.city = getVal(data, "city", "businessCity", "business_city", "City", "BillingCity", "Real_Estate_City__c") || nb.city;
+        nb.state = getVal(data, "state", "businessState", "business_state", "State", "BillingState", "Real_Estate_State__c") || nb.state;
+        nb.zip = getVal(data, "zip", "businessZip", "business_zip", "postalCode", "PostalCode", "BillingPostalCode", "Real_Estate_Zip__c") || nb.zip;
+        nb.website = getVal(data, "website", "Website", "url") || nb.website;
+        nb.phone = getVal(data, "phone", "businessPhone", "business_phone", "Phone") || nb.phone;
+        nb.ownRealEstate = getVal(data, "ownRealEstate", "own_real_estate", "ownsRealEstate", "Rent_or_Own__c", "Do_you_own_real_estate__c") || nb.ownRealEstate;
+        nb.openLoans = getVal(data, "openLoans", "open_loans", "hasOpenBusinessLoans", "has_open_business_loans", "Has_Open_Business_Loans__c", "Do_you_have_open_business_loans__c") || nb.openLoans;
         if (!nb.website) { const domain = extractDomain(email); if (domain) nb.website = "https://" + domain; }
         setBiz(nb);
-
-        // -------------------------
-        // Prefill primary owner
-        // -------------------------
         const no = { ...owners[0] };
-        no.firstName = getVal(data, "firstName", "FirstName") || no.firstName;
-        no.lastName = getVal(data, "lastName", "LastName") || no.lastName;
-        no.dob = getVal(data, "ownerBirthdate", "dob", "csbs__Birthdate__c") || no.dob;
-        no.ssn = getVal(data, "ownerSsn", "ssn", "csbs__Social_Security_Number_Unencrypted__c") || no.ssn;
-        no.ownership = getVal(data, "ownerOwnership", "ownership", "Ownership_Percentage__c", "csbs__Ownership_Percentage__c") || no.ownership;
-        no.creditScore = getVal(data, "creditScore", "creditScoreApplication", "csbs__CreditScore__c", "Credit_Score_Application__c") || no.creditScore;
-        no.address = getVal(data, "ownerHomeStreet", "ownerAddress", "csbs__Home_Address_Street__c") || no.address;
-        no.city = getVal(data, "ownerHomeCity", "ownerCity", "csbs__Home_Address_City__c") || no.city;
-        no.state = getVal(data, "ownerHomeState", "ownerState", "csbs__Home_Address_State__c") || no.state;
-        no.zip = getVal(data, "ownerHomeZip", "ownerZip", "csbs__Home_Address_Zip_Code__c") || no.zip;
-        no.email = getVal(data, "email", "Email") || email;
-        no.cell = getVal(data, "mobilePhone", "cell", "MobilePhone") || no.cell;
+        no.firstName = getVal(data, "firstName", "first_name", "FirstName", "ownerFirstName") || no.firstName;
+        no.lastName = getVal(data, "lastName", "last_name", "LastName", "ownerLastName") || no.lastName;
+        no.dob = getVal(data, "dob", "date_of_birth", "birthdate", "ownerBirthdate", "ownerDob", "csbs__Birthdate__c", "Birthdate") || no.dob;
+        no.ssn = getVal(data, "ssn", "social_security_number", "ownerSsn", "csbs__Social_Security_Number_Unencrypted__c", "SSN__c") || no.ssn;
+        no.ownership = getVal(data, "ownership", "ownershipPercentage", "ownership_percentage", "ownerOwnership", "Ownership_Percentage__c", "csbs__Ownership_Percentage__c") || no.ownership;
+        no.creditScore = getVal(data, "creditScore", "credit_score", "creditScoreApplication", "csbs__CreditScore__c", "Credit_Score_Application__c") || no.creditScore;
+        no.address = getVal(data, "ownerAddress", "owner_address", "homeAddress", "ownerHomeStreet", "csbs__Home_Address_Street__c") || no.address;
+        no.city = getVal(data, "ownerCity", "owner_city", "ownerHomeCity", "csbs__Home_Address_City__c") || no.city;
+        no.state = getVal(data, "ownerState", "owner_state", "ownerHomeState", "csbs__Home_Address_State__c") || no.state;
+        no.zip = getVal(data, "ownerZip", "owner_zip", "ownerHomeZip", "csbs__Home_Address_Zip_Code__c") || no.zip;
+        no.email = getVal(data, "email", "Email", "ownerEmail", "owner_email") || email;
+        no.cell = getVal(data, "cell", "mobile", "mobilePhone", "ownerCell", "MobilePhone") || no.cell;
         const nOwners = [no, ...owners.slice(1)];
-
-        // -------------------------
-        // Prefill owner 2 if present
-        // -------------------------
-        const o2FirstName = getVal(data, "owner2FirstName", "csbs__Owner_2_First_Name__c");
-        if (o2FirstName) {
+        const o2 = getVal(data, "owner2FirstName", "owner_2_first_name", "csbs__Owner_2_First_Name__c");
+        if (o2) {
           const o2o = emptyOwner();
-          o2o.firstName = o2FirstName;
-          o2o.lastName = getVal(data, "owner2LastName", "csbs__Owner_2_Last_Name__c");
-          o2o.dob = getVal(data, "owner2Birthday", "csbs__Owner_2_Birthday__c");
-          o2o.ssn = getVal(data, "owner2Ssn", "csbs__Owner_2_Social_Security_Number__c");
-          o2o.ownership = getVal(data, "owner2Ownership", "csbs__Owner_2_Ownership__c");
-          o2o.creditScore = getVal(data, "owner2CreditScore", "csbs__Owner_2_Credit_Score__c", "csbs__Owner_2_CreditScore__c");
-          o2o.address = getVal(data, "owner2HomeStreet", "csbs__Owner_2_Home_Address_Street__c");
-          o2o.city = getVal(data, "owner2HomeCity", "csbs__Owner_2_Home_Address_City__c");
-          o2o.state = getVal(data, "owner2HomeState", "csbs__Owner_2_Home_Address_State__c");
-          o2o.zip = getVal(data, "owner2HomeZip", "csbs__Owner_2_Home_Address_Zip_Code__c");
-          o2o.email = getVal(data, "owner2Email", "csbs__Owner_2_Email__c");
-          o2o.cell = getVal(data, "owner2Mobile", "csbs__Owner_2_Mobile__c");
+          o2o.firstName = o2;
+          o2o.lastName = getVal(data, "owner2LastName", "owner_2_last_name", "csbs__Owner_2_Last_Name__c");
+          o2o.dob = getVal(data, "owner2Birthday", "owner_2_birthday", "owner2Dob", "csbs__Owner_2_Birthday__c");
+          o2o.ssn = getVal(data, "owner2Ssn", "owner_2_ssn", "csbs__Owner_2_Social_Security_Number__c");
+          o2o.creditScore = getVal(data, "owner2CreditScore", "owner_2_credit_score", "csbs__Owner_2_CreditScore__c", "csbs__Owner_2_Credit_Score__c");
+          o2o.address = getVal(data, "owner2Address", "owner2HomeStreet", "csbs__Owner_2_Home_Address_Street__c");
+          o2o.city = getVal(data, "owner2City", "owner2HomeCity", "csbs__Owner_2_Home_Address_City__c");
+          o2o.state = getVal(data, "owner2State", "owner2HomeState", "csbs__Owner_2_Home_Address_State__c");
+          o2o.zip = getVal(data, "owner2Zip", "owner2HomeZip", "csbs__Owner_2_Home_Address_Zip_Code__c");
+          o2o.email = getVal(data, "owner2Email", "owner_2_email", "csbs__Owner_2_Email__c");
+          o2o.cell = getVal(data, "owner2Mobile", "owner2Cell", "csbs__Owner_2_Mobile__c");
           nOwners.push(o2o);
         }
         setOwners(nOwners);
@@ -240,7 +222,6 @@ export default function App() {
   const addBankSlot = () => setBankFiles(p => [...p, null]);
   const requiredBankCount = 4;
 
-  // Multi-file input handler — distributes selected files into empty slots starting at this index
   const handleBankFileInput = (i, fileList) => {
     const files = Array.from(fileList);
     if (files.length === 0) return;
@@ -257,9 +238,9 @@ export default function App() {
     setBankErrors("");
   };
 
-  // Bank upload submit — uses multipart/form-data so files are sent as binary attachments
-  // rather than base64-encoded JSON. n8n receiver must parse multipart (Webhook node with
-  // "Binary Data" option enabled, or a Move Binary Data step).
+  // Bank upload still targets WEBHOOK directly (multipart/form-data). If this fails with
+  // CORS, we'll need a separate multipart proxy endpoint since the JSON proxy can't
+  // forward FormData cleanly.
   const handleBankSubmit = async () => {
     const missing = bankFiles.slice(0, requiredBankCount).filter(f => !f).length;
     if (missing > 0) { setBankErrors(`First ${requiredBankCount} months are required`); return; }
@@ -327,7 +308,6 @@ export default function App() {
   }
 
   if (page === "thanks") {
-    const ini = agent ? getInitials(agent.Name) : "";
     return (
       <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column", background: "#f1f5f9", fontFamily: "'Plus Jakarta Sans',sans-serif", ...bottomPad }}>
         <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
@@ -379,7 +359,6 @@ export default function App() {
   }
 
   if (showEmail) {
-    const ini = agent ? getInitials(agent.Name) : "";
     return (
       <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column", background: `linear-gradient(170deg,${NV1} 0%,#0d2137 50%,${NV2} 100%)`, fontFamily: "'Plus Jakarta Sans',sans-serif", ...bottomPad }}>
         <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
