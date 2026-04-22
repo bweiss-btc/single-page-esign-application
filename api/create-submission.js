@@ -37,10 +37,21 @@ function setSecurityHeaders(res) {
   res.setHeader('Strict-Transport-Security', 'max-age=63072000; includeSubDomains; preload');
 }
 
-// Cache template field names for a short window. Template fields can be assigned to different
-// submitter roles; the same name (e.g. "Owner First Name") may appear on multiple submitters.
-// The cache just records which names exist SOMEWHERE on the template so we can drop unknown
-// fields before submission (safety net against typos or removed fields).
+// Scrub fields that shouldn't persist in DocuSeal's metadata store (passes through their DB
+// and comes back in the completion callback). Keep identifiers and business context, drop
+// raw SSNs and anything else we don't want sitting in DocuSeal logs.
+function scrubForMetadata(submissionSnapshot) {
+  const s = JSON.parse(JSON.stringify(submissionSnapshot || {}));
+  if (Array.isArray(s.owners)) {
+    s.owners = s.owners.map(o => {
+      const clean = { ...o };
+      delete clean.ssn;
+      return clean;
+    });
+  }
+  return s;
+}
+
 let _templateFieldsCache = null;
 let _templateFieldsCacheAt = 0;
 const TEMPLATE_CACHE_MS = 5 * 60 * 1000;
@@ -98,8 +109,32 @@ export default async function handler(req, res) {
       if (typeof metadata === 'string') { try { parsedMetadata = JSON.parse(metadata); } catch(e) { parsedMetadata = {}; } }
       const callbackSlug = parsedMetadata.slug || null;
       const callbackAgentInfo = parsedMetadata.agent_info || null;
+      // Full application snapshot we stashed at submission-creation time. Gives n8n the
+      // business/owners/email context without needing to join against the earlier
+      // application_submitted event.
+      const callbackBusiness = parsedMetadata.business || null;
+      const callbackOwners = parsedMetadata.owners || null;
+      const callbackEmail = parsedMetadata.email || firstSubmitter.email || null;
       await fetch(MAIN_WEBHOOK, { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ event: "application_signed", step: "docuseal_completed", docuseal_event: payload.event_type || "submission.completed", timestamp: new Date().toISOString(), submission_id: submissionData.id || null, submitter_email: firstSubmitter.email || null, submitter_role: firstSubmitter.role || null, status: firstSubmitter.status || "completed", slug: callbackSlug, agent_param: callbackSlug, agent_info: callbackAgentInfo, signed_documents: documents.map(d => ({ name: d.name || d.filename || "signed-document", url: d.url || d.download_url || null })), fields, raw_payload: payload })
+        body: JSON.stringify({
+          event: "application_signed",
+          step: "docuseal_completed",
+          docuseal_event: payload.event_type || "submission.completed",
+          timestamp: new Date().toISOString(),
+          submission_id: submissionData.id || null,
+          submitter_email: firstSubmitter.email || null,
+          submitter_role: firstSubmitter.role || null,
+          status: firstSubmitter.status || "completed",
+          slug: callbackSlug,
+          agent_param: callbackSlug,
+          agent_info: callbackAgentInfo,
+          email: callbackEmail,
+          business: callbackBusiness,
+          owners: callbackOwners,
+          signed_documents: documents.map(d => ({ name: d.name || d.filename || "signed-document", url: d.url || d.download_url || null })),
+          fields,
+          raw_payload: payload
+        })
       });
       return res.status(200).json({ success: true });
     } catch (error) { return res.status(200).json({ success: false }); }
@@ -125,8 +160,6 @@ export default async function handler(req, res) {
     const o1 = (owners && owners.length > 0) ? owners[0] : {};
     const o2 = (owners && owners.length > 1) ? owners[1] : null;
 
-    // Build Owner 1 submitter's field list: business info + their own owner fields.
-    // Owner fields use the same names as the template's "Owner 1" submitter role.
     const o1Fields = [];
     for (const [name, value] of Object.entries({ "Business Name": b.name, "DBA Name": b.dba, "Business Start Date": b.startDate, "Legal Entity": b.entity, "Industry": b.industry, "Tax Id": b.taxId, "Business Description": b.description, "Amount Requested": b.amountRequested, "Annual Revenue": b.annualRevenue, "Use of Proceeds": b.useOfProceeds, "Products Interested In": b.product, "Business Address": b.address, "Business City": b.city, "Business State": b.state, "Business Zip": b.zip, "Website": b.website, "Phone": b.phone, "Owns Real Estate": b.ownRealEstate, "Has Open Business Loans": b.openLoans })) {
       o1Fields.push({ name, default_value: (value && String(value).trim()) || " ", readonly: true });
@@ -136,8 +169,6 @@ export default async function handler(req, res) {
     }
     o1Fields.push({ name: "Owner Signature Date", default_value: today, readonly: true });
 
-    // Build Owner 2 submitter's field list using the SAME field names as Owner 1. DocuSeal
-    // scopes fields by submitter role, so each role has its own copy of "Owner First Name" etc.
     let o2Fields = null;
     if (o2) {
       o2Fields = [];
@@ -147,7 +178,6 @@ export default async function handler(req, res) {
       o2Fields.push({ name: "Owner Signature Date", default_value: today, readonly: true });
     }
 
-    // Safety net: drop any field whose name isn't present on the template at all.
     let safeO1 = o1Fields;
     let safeO2 = o2Fields;
     const known = await getTemplateFieldNames(DOCUSEAL_BASE_ENDPOINT, DOCUSEAL_TEMPLATE_ID, DOCUSEAL_API_KEY);
@@ -158,15 +188,23 @@ export default async function handler(req, res) {
 
     const redirectUrl = APP_URL + "/?signed=true" + (slug ? "&agent=" + encodeURIComponent(slug) : "");
 
-    // Submitters array: Owner 1 is the person currently in the browser, so we redirect them
-    // and suppress the email. Owner 2 is remote, so DocuSeal emails them their signing link.
+    // Application snapshot sent into DocuSeal metadata so it echoes back in the completion
+    // callback. Keeps application_signed self-contained — n8n doesn't need to match events.
+    const snapshotMetadata = {
+      slug: slug || null,
+      agent_info: agent_info || null,
+      email: ownerEmail || null,
+      business: business || null,
+      owners: scrubForMetadata({ owners }).owners || null
+    };
+
     const submitters = [{
       email: ownerEmail || "applicant@example.com",
       role: "Owner 1",
       fields: safeO1,
       completed_redirect_url: redirectUrl,
       send_email: false,
-      metadata: { slug: slug || null, agent_info: agent_info || null, submitter_role: "owner_1" }
+      metadata: { ...snapshotMetadata, submitter_role: "owner_1" }
     }];
     if (o2 && safeO2) {
       submitters.push({
@@ -175,13 +213,13 @@ export default async function handler(req, res) {
         fields: safeO2,
         completed_redirect_url: redirectUrl,
         send_email: true,
-        metadata: { slug: slug || null, agent_info: agent_info || null, submitter_role: "owner_2" }
+        metadata: { ...snapshotMetadata, submitter_role: "owner_2" }
       });
     }
 
     const response = await fetch(DOCUSEAL_BASE_ENDPOINT + "/api/submissions", {
       method: "POST", headers: { "X-Auth-Token": DOCUSEAL_API_KEY, "Content-Type": "application/json" },
-      body: JSON.stringify({ template_id: parseInt(DOCUSEAL_TEMPLATE_ID), send_email: false, completed_redirect_url: redirectUrl, metadata: { slug: slug || null, agent_info: agent_info || null }, submitters })
+      body: JSON.stringify({ template_id: parseInt(DOCUSEAL_TEMPLATE_ID), send_email: false, completed_redirect_url: redirectUrl, metadata: snapshotMetadata, submitters })
     });
 
     const responseText = await response.text();
@@ -190,8 +228,6 @@ export default async function handler(req, res) {
     let data;
     try { data = JSON.parse(responseText); } catch (e) { return res.status(500).json({ error: "Invalid JSON" }); }
     const submitterList = Array.isArray(data) ? data : [data];
-    // Redirect the person in the browser to their OWN signing link (Owner 1), not whichever
-    // submitter happens to come back first.
     const owner1Sub = submitterList.find(s => s && s.role === "Owner 1") || submitterList[0];
     if (!owner1Sub?.slug) return res.status(500).json({ error: "No slug returned" });
 
