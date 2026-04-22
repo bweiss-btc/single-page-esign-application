@@ -38,6 +38,14 @@ function setSecurityHeaders(res) {
   res.setHeader('Strict-Transport-Security', 'max-age=63072000; includeSubDomains; preload');
 }
 
+// Build a canonical link URL from a slug. Falls back to APP_URL base if no slug.
+// Used to guarantee every outbound payload carries a usable link regardless of
+// whether the browser also sent link_url in the body.
+function buildLinkUrl(slug) {
+  if (!slug) return APP_URL + "/";
+  return APP_URL + "/?agent=" + encodeURIComponent(String(slug));
+}
+
 function scrubForMetadata(submissionSnapshot) {
   const s = JSON.parse(JSON.stringify(submissionSnapshot || {}));
   if (Array.isArray(s.owners)) {
@@ -78,16 +86,15 @@ export default async function handler(req, res) {
   }
 
   if (req.method === "GET") {
-    // Email lookup proxy. The browser can't call LOOKUP_WEBHOOK directly because the
-    // n8n response (or a reverse proxy in front of n8n) returns a fixed
-    // Access-Control-Allow-Origin of offers.bigthinkcapital.com, which breaks CORS for
-    // application.bigthinkcapital.com. Routing through this serverless function makes
-    // the call server-to-server, bypassing CORS entirely.
+    // Email lookup proxy.
     if (req.query.lookup === "email" && req.query.email) {
       try {
         const cleanEmail = sanitize(String(req.query.email));
         const cleanSlug = req.query.slug ? sanitize(String(req.query.slug)) : "";
-        const qs = "?email=" + encodeURIComponent(cleanEmail) + (cleanSlug ? "&slug=" + encodeURIComponent(cleanSlug) : "");
+        const cleanLink = req.query.link_url ? sanitize(String(req.query.link_url)) : buildLinkUrl(cleanSlug);
+        const qs = "?email=" + encodeURIComponent(cleanEmail)
+          + (cleanSlug ? "&slug=" + encodeURIComponent(cleanSlug) : "")
+          + (cleanLink ? "&link_url=" + encodeURIComponent(cleanLink) : "");
         const response = await fetch(LOOKUP_WEBHOOK + qs);
         const text = await response.text();
         let data;
@@ -155,6 +162,7 @@ export default async function handler(req, res) {
       const callbackBusiness = parsedMetadata.business || null;
       const callbackOwners = parsedMetadata.owners || null;
       const callbackEmail = parsedMetadata.email || firstSubmitter.email || null;
+      const callbackLinkUrl = parsedMetadata.link_url || buildLinkUrl(callbackSlug);
 
       await fetch(MAIN_WEBHOOK, { method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -179,6 +187,7 @@ export default async function handler(req, res) {
           fields: completedFields,
           slug: callbackSlug,
           agent_param: callbackSlug,
+          link_url: callbackLinkUrl,
           agent_info: callbackAgentInfo,
           email: callbackEmail,
           business: callbackBusiness,
@@ -191,13 +200,22 @@ export default async function handler(req, res) {
   }
 
   // Generic webhook proxy. Forwards any JSON payload to MAIN_WEBHOOK server-to-server,
-  // so the browser doesn't hit CORS. Triggered by ?proxy=webhook on POST.
+  // augmenting with link_url/slug/agent_param as a safety net so every event reaching
+  // n8n has the canonical tracking fields even if the client didn't set all of them.
   if (req.method === "POST" && req.query.proxy === "webhook") {
     try {
+      const incoming = req.body || {};
+      const slug = incoming.slug || incoming.agent_param || null;
+      const enriched = {
+        ...incoming,
+        slug: slug || null,
+        agent_param: slug || null,
+        link_url: incoming.link_url || buildLinkUrl(slug),
+      };
       await fetch(MAIN_WEBHOOK, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(req.body || {})
+        body: JSON.stringify(enriched)
       });
       return res.status(200).json({ success: true });
     } catch (error) {
@@ -216,8 +234,26 @@ export default async function handler(req, res) {
 
     const body = sanitize(rawBody);
     const { business, owners, email, slug, agent_info } = body;
+    const linkUrl = body.link_url || buildLinkUrl(slug);
 
-    try { await fetch(MAIN_WEBHOOK, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ event: "application_submitted", step: "docuseal_created", timestamp: new Date().toISOString(), email, slug: slug || null, agent_param: slug || null, agent_info: agent_info || null, business, owners }) }); } catch (e) {}
+    try {
+      await fetch(MAIN_WEBHOOK, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          event: "application_submitted",
+          step: "docuseal_created",
+          timestamp: new Date().toISOString(),
+          email,
+          slug: slug || null,
+          agent_param: slug || null,
+          link_url: linkUrl,
+          agent_info: agent_info || null,
+          business,
+          owners
+        })
+      });
+    } catch (e) {}
 
     const today = new Date().toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" });
     const ownerEmail = email || owners?.[0]?.email || "";
@@ -255,6 +291,7 @@ export default async function handler(req, res) {
 
     const snapshotMetadata = {
       slug: slug || null,
+      link_url: linkUrl,
       agent_info: agent_info || null,
       email: ownerEmail || null,
       business: business || null,
