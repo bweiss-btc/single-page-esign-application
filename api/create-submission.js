@@ -37,9 +37,8 @@ function setSecurityHeaders(res) {
   res.setHeader('Strict-Transport-Security', 'max-age=63072000; includeSubDomains; preload');
 }
 
-// Scrub fields that shouldn't persist in DocuSeal's metadata store (passes through their DB
-// and comes back in the completion callback). Keep identifiers and business context, drop
-// raw SSNs and anything else we don't want sitting in DocuSeal logs.
+// Scrub fields that shouldn't persist in DocuSeal's metadata store. Keep identifiers and
+// business context; drop raw SSNs so they don't sit in DocuSeal logs.
 function scrubForMetadata(submissionSnapshot) {
   const s = JSON.parse(JSON.stringify(submissionSnapshot || {}));
   if (Array.isArray(s.owners)) {
@@ -94,45 +93,98 @@ export default async function handler(req, res) {
   if (req.method === "POST" && req.query.source === "docuseal") {
     try {
       const payload = req.body || {};
+      // DocuSeal sends either { event_type, data: {...} } or the submission object directly.
       const submissionData = payload.data || payload;
-      const submitters = submissionData.submitters || [];
-      const firstSubmitter = submitters[0] || {};
+      const allSubmitters = submissionData.submitters || [];
+      const firstSubmitter = allSubmitters[0] || {};
+
+      // Build a normalized signing-log summary for every submitter on the submission, so
+      // n8n can see who signed when, from what IP, and get per-signer audit info in one place.
+      const signingLog = allSubmitters.map(s => ({
+        role: s.role || null,
+        email: s.email || null,
+        name: s.name || null,
+        phone: s.phone || null,
+        status: s.status || null,
+        sent_at: s.sent_at || null,
+        opened_at: s.opened_at || null,
+        completed_at: s.completed_at || null,
+        declined_at: s.declined_at || null,
+        ip_address: s.ip || s.ip_address || null,
+        user_agent: s.ua || s.user_agent || null,
+        signing_url: s.embed_src || s.url || null,
+        fields: Array.isArray(s.fields) ? s.fields.reduce((acc, f) => { if (f && f.name) acc[f.name] = f.value; return acc; }, {}) : {}
+      }));
+
+      // Aggregate documents from submission + every submitter (deduped by URL).
       const documents = [];
-      if (submissionData.documents) documents.push(...submissionData.documents);
-      if (firstSubmitter.documents) documents.push(...firstSubmitter.documents);
-      const fields = {};
+      const seenDocUrls = new Set();
+      const addDoc = (d) => {
+        const url = d && (d.url || d.download_url);
+        if (!url || seenDocUrls.has(url)) return;
+        seenDocUrls.add(url);
+        documents.push({ name: d.name || d.filename || "signed-document", url });
+      };
+      if (Array.isArray(submissionData.documents)) submissionData.documents.forEach(addDoc);
+      allSubmitters.forEach(s => { if (Array.isArray(s.documents)) s.documents.forEach(addDoc); });
+
+      // Fields on the completion event come from whichever submitter triggered the callback.
+      const completedFields = {};
       if (firstSubmitter.fields && Array.isArray(firstSubmitter.fields)) {
-        for (const f of firstSubmitter.fields) fields[f.name] = f.value;
+        for (const f of firstSubmitter.fields) completedFields[f.name] = f.value;
       }
+
+      // Metadata echoes back verbatim from what we stored at submission-creation time.
       const metadata = submissionData.metadata || firstSubmitter.metadata || {};
       let parsedMetadata = metadata;
       if (typeof metadata === 'string') { try { parsedMetadata = JSON.parse(metadata); } catch(e) { parsedMetadata = {}; } }
       const callbackSlug = parsedMetadata.slug || null;
       const callbackAgentInfo = parsedMetadata.agent_info || null;
-      // Full application snapshot we stashed at submission-creation time. Gives n8n the
-      // business/owners/email context without needing to join against the earlier
-      // application_submitted event.
       const callbackBusiness = parsedMetadata.business || null;
       const callbackOwners = parsedMetadata.owners || null;
       const callbackEmail = parsedMetadata.email || firstSubmitter.email || null;
+
       await fetch(MAIN_WEBHOOK, { method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           event: "application_signed",
           step: "docuseal_completed",
           docuseal_event: payload.event_type || "submission.completed",
           timestamp: new Date().toISOString(),
+
+          // ── Submission identifiers
           submission_id: submissionData.id || null,
+          submission_created_at: submissionData.created_at || null,
+          submission_completed_at: submissionData.completed_at || firstSubmitter.completed_at || null,
+          audit_log_url: submissionData.audit_log_url || submissionData.audit_url || null,
+          combined_document_url: submissionData.combined_document_url || null,
+
+          // ── Current signer (the one that triggered this callback)
           submitter_email: firstSubmitter.email || null,
           submitter_role: firstSubmitter.role || null,
+          submitter_name: firstSubmitter.name || null,
+          submitter_ip: firstSubmitter.ip || firstSubmitter.ip_address || null,
+          submitter_user_agent: firstSubmitter.ua || firstSubmitter.user_agent || null,
+          submitter_completed_at: firstSubmitter.completed_at || null,
           status: firstSubmitter.status || "completed",
+
+          // ── Full signing log (all submitters including Owner 1 + Owner 2)
+          signing_log: signingLog,
+
+          // ── Signed documents (all signed PDFs + audit trail)
+          signed_documents: documents,
+
+          // ── Field values on the signed doc
+          fields: completedFields,
+
+          // ── Original application snapshot (stashed in DocuSeal metadata at creation time)
           slug: callbackSlug,
           agent_param: callbackSlug,
           agent_info: callbackAgentInfo,
           email: callbackEmail,
           business: callbackBusiness,
           owners: callbackOwners,
-          signed_documents: documents.map(d => ({ name: d.name || d.filename || "signed-document", url: d.url || d.download_url || null })),
-          fields,
+
+          // ── Raw DocuSeal payload for anything we didn't explicitly unpack
           raw_payload: payload
         })
       });
