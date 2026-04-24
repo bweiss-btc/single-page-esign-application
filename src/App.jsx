@@ -26,6 +26,25 @@ function sendWebhook(data) {
   } catch (e) {}
 }
 
+// Resolve the DocuSeal submission_id used to verify signature completion.
+// Priority: URL param (DocuSeal's {{submission_id}} template substitution if it
+// supports it) -> localStorage (set client-side before redirecting to DocuSeal).
+// Returns null if neither has a numeric ID — the verify call will then be skipped
+// and the user will land on the blocked screen.
+function resolveSubmissionId() {
+  try {
+    const fromUrl = getParam("sid");
+    // DocuSeal may not substitute {{submission_id}} in older versions; reject the
+    // literal template string.
+    if (fromUrl && fromUrl !== "{{submission_id}}" && /^\d+$/.test(fromUrl)) return fromUrl;
+  } catch (e) {}
+  try {
+    const fromStorage = localStorage.getItem("btc_submission_id");
+    if (fromStorage && /^\d+$/.test(fromStorage)) return fromStorage;
+  } catch (e) {}
+  return null;
+}
+
 export default function App() {
   const isMobile = useIsMobile();
   const isSigned = getParam("signed") === "true";
@@ -47,6 +66,12 @@ export default function App() {
   const [toast, setToast] = useState(null);
   const [modal, setModal] = useState(null);
   const [bankErrors, setBankErrors] = useState("");
+  // Signature verification gate. Bank upload is locked behind a server-side check
+  // against DocuSeal's API confirming the user actually completed the signing flow.
+  // Without this, anyone could navigate to /?signed=true and bypass the signature.
+  const [sigVerifying, setSigVerifying] = useState(isSigned);
+  const [sigVerified, setSigVerified] = useState(false);
+  const [sigBlockedReason, setSigBlockedReason] = useState(null);
 
   const [biz, setBiz] = useState({ name: "", dba: "", startDate: "", entity: "", industry: "", taxId: "", description: "", amountRequested: "", annualRevenue: "", useOfProceeds: "", product: "", address: "", city: "", state: "", zip: "", website: "", phone: "", ownRealEstate: "", openLoans: "" });
   const [owners, setOwners] = useState([emptyOwner()]);
@@ -141,6 +166,46 @@ export default function App() {
     }
   }, []);
 
+  // Verify signature on mount when the user lands on /?signed=true. This is the
+  // gate that prevents direct URL access to the bank upload page. We require BOTH
+  // a valid submission_id (from URL or localStorage) AND a matching email (from
+  // sessionStorage) before unlocking the upload UI.
+  useEffect(() => {
+    if (!isSigned) return;
+    const sid = resolveSubmissionId();
+    if (!sid) {
+      setSigVerifying(false);
+      setSigVerified(false);
+      setSigBlockedReason("no_session");
+      return;
+    }
+    let storedEmail = "";
+    try { storedEmail = sessionStorage.getItem("btc_email") || ""; } catch (e) {}
+    const qs = "?verify=signature&sid=" + encodeURIComponent(sid)
+      + (storedEmail ? "&email=" + encodeURIComponent(storedEmail) : "");
+    fetch("/api/create-submission" + qs)
+      .then(r => r.json())
+      .then(d => {
+        if (d && d.verified) {
+          setSigVerified(true);
+          setSigBlockedReason(null);
+          if (d.email) {
+            _email = d.email;
+            try { sessionStorage.setItem("btc_email", d.email); } catch (e) {}
+          }
+        } else {
+          setSigVerified(false);
+          setSigBlockedReason((d && d.reason) || "not_verified");
+        }
+        setSigVerifying(false);
+      })
+      .catch(() => {
+        setSigVerifying(false);
+        setSigVerified(false);
+        setSigBlockedReason("network");
+      });
+  }, [isSigned]);
+
   const initDocuSeal = useCallback(async () => {
     setDocLoading(true); setDocError(null);
     try {
@@ -149,6 +214,12 @@ export default function App() {
         body: JSON.stringify({ business: { ...biz, taxId: rawTaxId(biz.taxId), phone: rawPhone(biz.phone), amountRequested: rawMoney(biz.amountRequested), annualRevenue: rawMoney(biz.annualRevenue) }, owners: owners.map(o => ({ ...o, cell: rawPhone(o.cell) })), email, slug, agent_param: slug, link_url: getLinkUrl(), agent_info: _agentData || undefined, _company_url: _honeypot }) });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed");
+      // Persist the submission_id so we can verify completion when the user returns
+      // from DocuSeal. Survives the cross-origin redirect (localStorage is per-origin
+      // but the browser tab persists).
+      try {
+        if (data.submission_id) localStorage.setItem("btc_submission_id", String(data.submission_id));
+      } catch (e) {}
       window.location.href = data.signingUrl;
     } catch (err) { setDocError(err.message); setDocLoading(false); }
   }, [biz, owners, email]);
@@ -165,8 +236,6 @@ export default function App() {
       const linkUrl = getLinkUrl();
       const extraQ = (agentParam ? "&slug=" + encodeURIComponent(agentParam) : "")
         + (linkUrl ? "&link_url=" + encodeURIComponent(linkUrl) : "");
-      // Email lookup via Vercel proxy (server-to-server) to bypass the CORS header that
-      // n8n / its reverse proxy sends (Access-Control-Allow-Origin:https://offers...).
       const res = await fetch("/api/create-submission?lookup=email&email=" + encodeURIComponent(email) + extraQ);
       const d = await res.json();
       const data = Array.isArray(d) ? d[0] : d;
@@ -252,6 +321,12 @@ export default function App() {
 
   // Bank upload routes through /api/upload-bank (Vercel multipart proxy).
   const handleBankSubmit = async () => {
+    // Hard-stop if signature isn't verified. This is also enforced in the render
+    // logic, but defending in depth in case state was somehow bypassed.
+    if (!sigVerified) {
+      setBankErrors("You must complete the signed application before uploading bank statements.");
+      return;
+    }
     const missing = bankFiles.slice(0, requiredBankCount).filter(f => !f).length;
     if (missing > 0) { setBankErrors(`First ${requiredBankCount} months are required`); return; }
     setBankErrors(""); setBankUploading(true); setUploadProgress("Uploading...");
@@ -265,6 +340,8 @@ export default function App() {
       const agentParam = getParam("agent");
       if (agentParam) { fd.append("agent_param", agentParam); fd.append("slug", agentParam); }
       fd.append("link_url", getLinkUrl());
+      const sid = resolveSubmissionId();
+      if (sid) fd.append("submission_id", sid);
       if (_agentData) fd.append("agent_info", JSON.stringify(_agentData));
       fd.append("total_files", String(validFiles.length));
       validFiles.forEach((file, i) => { fd.append(`file_${i}`, file, file.name); });
@@ -274,6 +351,9 @@ export default function App() {
         try { const j = await res.json(); if (j && j.error) msg = j.error; } catch(e) {}
         throw new Error(msg);
       }
+      // Clear the submission_id from localStorage on successful upload so a refresh
+      // doesn't accidentally let them upload again with the same signature.
+      try { localStorage.removeItem("btc_submission_id"); } catch (e) {}
       setUploadProgress(""); setBankUploading(false); setPage("thanks");
     } catch (e) {
       setUploadProgress(""); setBankUploading(false);
@@ -286,6 +366,56 @@ export default function App() {
   const E = hasError;
 
   if (page === "bank") {
+    // Gate 1: still verifying signature with DocuSeal API. Show loading spinner.
+    if (sigVerifying) {
+      return (
+        <div style={{ minHeight: "100vh", background: "#f1f5f9", fontFamily: "'Plus Jakarta Sans',sans-serif", display: "flex", flexDirection: "column", ...bottomPad }}>
+          <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+          <style>{`@keyframes spin{to{transform:rotate(360deg);}}`}</style>
+          <TopBar />
+          <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+            <div style={{ textAlign: "center" }}>
+              <div style={{ width: 44, height: 44, border: "3px solid #e2e8f0", borderTopColor: NV2, borderRadius: "50%", animation: "spin 0.8s linear infinite", margin: "0 auto 18px" }} />
+              <p style={{ fontSize: 15, fontWeight: 700, color: "#1a202c", margin: "0 0 4px" }}>Verifying your signed application...</p>
+              <p style={{ fontSize: 12, color: "#94a3b8", margin: 0 }}>Just a moment</p>
+            </div>
+          </div>
+          <AgentFooter agent={agent} isMobile={isMobile} />
+        </div>
+      );
+    }
+
+    // Gate 2: signature could not be verified. Block bank upload entirely.
+    if (!sigVerified) {
+      const restartHref = (() => {
+        const slug = getParam("agent");
+        return slug ? "/?agent=" + encodeURIComponent(slug) : "/";
+      })();
+      return (
+        <div style={{ minHeight: "100vh", background: "#f1f5f9", fontFamily: "'Plus Jakarta Sans',sans-serif", display: "flex", flexDirection: "column", ...bottomPad }}>
+          <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+          <TopBar />
+          <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+            <div style={{ maxWidth: 460, width: "100%", background: "#fff", borderRadius: 16, padding: "32px 28px", boxShadow: "0 1px 3px rgba(0,0,0,0.05),0 8px 30px rgba(0,0,0,0.06)", textAlign: "center" }}>
+              <div style={{ width: 64, height: 64, borderRadius: "50%", margin: "0 auto 18px", background: "#fef3c7", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#b45309" strokeWidth="2.2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+              </div>
+              <h2 style={{ fontSize: 22, fontWeight: 800, color: "#1a202c", margin: "0 0 10px" }}>Signed Application Required</h2>
+              <p style={{ fontSize: 14, color: "#4a5568", lineHeight: 1.65, margin: "0 0 22px" }}>
+                We couldn{"\u2019"}t confirm a completed signed application for this session. To upload bank statements, please complete the application and signing process first.
+              </p>
+              {sigBlockedReason && sigBlockedReason !== "no_session" && (
+                <p style={{ fontSize: 11, color: "#94a3b8", margin: "-12px 0 22px" }}>Reason: {sigBlockedReason}</p>
+              )}
+              <a href={restartHref} style={{ display: "inline-block", padding: "13px 30px", borderRadius: 12, background: btnGrad, color: "#fff", fontSize: 14, fontWeight: 700, textDecoration: "none", boxShadow: "0 4px 14px rgba(10,25,41,0.3)" }}>Start Application</a>
+              <p style={{ fontSize: 11, color: "#94a3b8", margin: "18px 0 0" }}>Already signed? Make sure you{"\u2019"}re using the same browser and device as when you signed.</p>
+            </div>
+          </div>
+          <AgentFooter agent={agent} isMobile={isMobile} />
+        </div>
+      );
+    }
+
     const monthNames = getMonthNames(requiredBankCount);
     return (
       <div style={{ minHeight: "100vh", background: "#f1f5f9", fontFamily: "'Plus Jakarta Sans',sans-serif", ...bottomPad }}>
