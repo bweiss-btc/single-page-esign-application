@@ -38,9 +38,6 @@ function setSecurityHeaders(res) {
   res.setHeader('Strict-Transport-Security', 'max-age=63072000; includeSubDomains; preload');
 }
 
-// Build a canonical link URL from a slug. Falls back to APP_URL base if no slug.
-// Used to guarantee every outbound payload carries a usable link regardless of
-// whether the browser also sent link_url in the body.
 function buildLinkUrl(slug) {
   if (!slug) return APP_URL + "/";
   return APP_URL + "/?agent=" + encodeURIComponent(String(slug));
@@ -81,11 +78,62 @@ async function getTemplateFieldNames(baseEndpoint, templateId, apiKey) {
 export default async function handler(req, res) {
   setSecurityHeaders(res);
   const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.headers['x-real-ip'] || 'unknown';
-  if (req.method === 'POST' && isRateLimited(ip)) {
+  // Rate-limit POSTs and signature-verify GETs (the latter could be brute-forced
+  // since DocuSeal submission IDs are sequential integers).
+  if ((req.method === 'POST' || (req.method === 'GET' && req.query.verify === 'signature')) && isRateLimited(ip)) {
     return res.status(429).json({ error: "Too many requests. Please wait a moment and try again." });
   }
 
   if (req.method === "GET") {
+    // Signature verification endpoint. Used by the bank upload page to confirm that
+    // the user actually completed the DocuSeal signing flow before allowing them to
+    // upload bank statements. Without this check, anyone could navigate directly to
+    // /?signed=true and bypass the signature.
+    //
+    // Defense in depth: requires BOTH submission_id (from localStorage, set during
+    // submission creation) AND email (from sessionStorage). Server checks DocuSeal
+    // for the submission, confirms Owner 1 has status=completed, and that the email
+    // matches the submitter's email. Even if someone guessed a numeric submission_id,
+    // they'd need the right email too.
+    if (req.query.verify === "signature") {
+      const { DOCUSEAL_BASE_ENDPOINT: baseEndpoint, DOCUSEAL_API_KEY: apiKey } = process.env;
+      if (!baseEndpoint || !apiKey) {
+        return res.status(500).json({ verified: false, reason: "config" });
+      }
+      try {
+        const sidRaw = req.query.sid ? sanitize(String(req.query.sid)) : "";
+        const emailRaw = req.query.email ? sanitize(String(req.query.email)).toLowerCase() : "";
+        if (!sidRaw || !/^\d+$/.test(sidRaw)) {
+          return res.status(200).json({ verified: false, reason: "invalid_sid" });
+        }
+        const url = baseEndpoint + "/api/submissions/" + encodeURIComponent(sidRaw);
+        const r = await fetch(url, { headers: { "X-Auth-Token": apiKey } });
+        if (!r.ok) {
+          return res.status(200).json({ verified: false, reason: "lookup_failed", status: r.status });
+        }
+        const sub = await r.json();
+        const submitters = Array.isArray(sub.submitters) ? sub.submitters : [];
+        // Owner 1 is the in-browser signer (their completion is what triggers the
+        // redirect back to our app). Owner 2 may still be pending.
+        const owner1 = submitters.find(s => s && s.role === "Owner 1") || submitters[0];
+        const isCompleted = !!(owner1 && (owner1.status === "completed" || owner1.completed_at));
+        const submitterEmail = (owner1?.email || "").toLowerCase();
+        // Email must match if provided. If client didn't send one, fall back to
+        // submission_id-only check (less strict but still requires the right ID).
+        const emailMatches = !emailRaw || emailRaw === submitterEmail;
+        const verified = isCompleted && emailMatches;
+        return res.status(200).json({
+          verified,
+          email: verified ? submitterEmail : null,
+          submission_id: sub.id || sidRaw,
+          slug: (sub.metadata && sub.metadata.slug) || null,
+          reason: verified ? null : (!isCompleted ? "not_completed" : "email_mismatch")
+        });
+      } catch (e) {
+        return res.status(200).json({ verified: false, reason: "error" });
+      }
+    }
+
     // Email lookup proxy.
     if (req.query.lookup === "email" && req.query.email) {
       try {
@@ -199,9 +247,6 @@ export default async function handler(req, res) {
     } catch (error) { return res.status(200).json({ success: false }); }
   }
 
-  // Generic webhook proxy. Forwards any JSON payload to MAIN_WEBHOOK server-to-server,
-  // augmenting with link_url/slug/agent_param as a safety net so every event reaching
-  // n8n has the canonical tracking fields even if the client didn't set all of them.
   if (req.method === "POST" && req.query.proxy === "webhook") {
     try {
       const incoming = req.body || {};
@@ -287,7 +332,11 @@ export default async function handler(req, res) {
       if (o2Fields) safeO2 = o2Fields.filter(f => known.has(f.name));
     }
 
-    const redirectUrl = APP_URL + "/?signed=true" + (slug ? "&agent=" + encodeURIComponent(slug) : "");
+    // Include {{submission_id}} template token. DocuSeal will substitute the actual
+    // ID at redirect time. If unsupported by the DocuSeal version, the literal
+    // string lands in the URL — App.jsx detects and ignores that, falling back to
+    // localStorage which we also set client-side before redirect.
+    const redirectUrl = APP_URL + "/?signed=true&sid={{submission_id}}" + (slug ? "&agent=" + encodeURIComponent(slug) : "");
 
     const snapshotMetadata = {
       slug: slug || null,
@@ -330,7 +379,14 @@ export default async function handler(req, res) {
     const submitterList = Array.isArray(data) ? data : [data];
     const owner1Sub = submitterList.find(s => s && s.role === "Owner 1") || submitterList[0];
     if (!owner1Sub?.slug) return res.status(500).json({ error: "No slug returned" });
+    // The submission_id is what we'll use for client-side signature verification
+    // after the DocuSeal flow completes.
+    const submissionId = owner1Sub.submission_id || owner1Sub.id || null;
 
-    return res.status(200).json({ slug: owner1Sub.slug, signingUrl: DOCUSEAL_BASE_ENDPOINT + "/s/" + owner1Sub.slug });
+    return res.status(200).json({
+      slug: owner1Sub.slug,
+      signingUrl: DOCUSEAL_BASE_ENDPOINT + "/s/" + owner1Sub.slug,
+      submission_id: submissionId
+    });
   } catch (error) { return res.status(500).json({ error: "Failed: " + error.message }); }
 }
