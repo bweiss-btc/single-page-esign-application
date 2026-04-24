@@ -49,6 +49,29 @@ function normalizeOwners(owners) {
   return owners.map(o => ({ ...o, cell: rawPhone(o.cell || "") }));
 }
 
+// HTML native <input type="date"> accepts years up to 275760 AD — there's no
+// built-in max-length on the year. If a user types "01/01/20000" the browser
+// silently emits "20000-01-01", which then flows through to Salesforce as
+// garbage data. Clamp any 5+ digit year to 4 digits on input.
+function clampDateYear(value) {
+  if (!value || typeof value !== "string") return value;
+  const m = value.match(/^(\d+)(-\d{2}-\d{2})$/);
+  if (!m) return value;
+  if (m[1].length <= 4) return value;
+  return m[1].slice(0, 4) + m[2];
+}
+
+// Returns true if a YYYY-MM-DD date string is within a reasonable range
+// (year 1900-2100). Used as a safety net in validation after clampDateYear
+// already truncates 5+ digit years during input.
+function isReasonableDate(value) {
+  if (!value || typeof value !== "string") return false;
+  const m = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return false;
+  const y = parseInt(m[1], 10);
+  return y >= 1900 && y <= 2100;
+}
+
 export default function App() {
   const isMobile = useIsMobile();
   const isSigned = getParam("signed") === "true";
@@ -115,6 +138,7 @@ export default function App() {
     const m = [];
     if (!biz.name) m.push({ id: "biz-name", label: "Business Name", hint: "Enter your legal business name" });
     if (!biz.startDate) m.push({ id: "biz-startDate", label: "Business Start Date" });
+    else if (!isReasonableDate(biz.startDate)) m.push({ id: "biz-startDate", label: "Business Start Date", hint: "Year must be between 1900 and 2100" });
     if (!biz.entity) m.push({ id: "biz-entity", label: "Legal Entity", hint: "Select your business entity type" });
     if (!biz.industry) m.push({ id: "biz-industry", label: "Industry" });
     if (!biz.taxId || rawTaxId(biz.taxId).length < 9) m.push({ id: "biz-taxId", label: "Federal Tax ID", hint: "Must be 9 digits (XX-XXXXXXX)" });
@@ -139,6 +163,7 @@ export default function App() {
       if (!o.firstName) m.push({ id: `own${i}-fn`, label: `${p}: First Name` });
       if (!o.lastName) m.push({ id: `own${i}-ln`, label: `${p}: Last Name` });
       if (!o.dob) m.push({ id: `own${i}-dob`, label: `${p}: Date of Birth` });
+      else if (!isReasonableDate(o.dob)) m.push({ id: `own${i}-dob`, label: `${p}: Date of Birth`, hint: "Year must be between 1900 and 2100" });
       if (!o.ssn || o.ssn.replace(/\D/g, "").length < 9) m.push({ id: `own${i}-ssn`, label: `${p}: SSN`, hint: "Must be 9 digits" });
       if (!o.ownership) m.push({ id: `own${i}-own`, label: `${p}: % Ownership` });
       if (!o.address) m.push({ id: `own${i}-addr`, label: `${p}: Address` });
@@ -482,7 +507,7 @@ export default function App() {
               <div className="form-pad" style={{ padding: "20px 24px 24px", display: "flex", flexDirection: "column", gap: 16 }}>
                 <Row><Field label="Business Name" value={biz.name} onChange={v => upBiz("name", v)} placeholder="Acme Corporation" required error={E} id="biz-name" /></Row>
                 <Row><Field label="DBA Name" value={biz.dba} onChange={v => upBiz("dba", v)} placeholder="Acme Co" /></Row>
-                <Row><Field label="Business Start Date" value={biz.startDate} onChange={v => upBiz("startDate", v)} type="date" half required error={E} id="biz-startDate" /><Select label="Legal Entity" value={biz.entity} onChange={v => upBiz("entity", v)} options={ENTITY_OPTS} half required error={E} id="biz-entity" /></Row>
+                <Row><Field label="Business Start Date" value={biz.startDate} onChange={v => upBiz("startDate", clampDateYear(v))} type="date" half required error={E} id="biz-startDate" /><Select label="Legal Entity" value={biz.entity} onChange={v => upBiz("entity", v)} options={ENTITY_OPTS} half required error={E} id="biz-entity" /></Row>
                 <Row><Field label="Industry" value={biz.industry} onChange={v => upBiz("industry", v)} placeholder="Technology" half required error={E} id="biz-industry" /><Field label="Federal Tax ID" value={biz.taxId} onChange={v => upBiz("taxId", v)} placeholder="12-3456789" half required fmt={fmtTaxId} raw={v => v} error={E} id="biz-taxId" noAuto /></Row>
                 <Row><Textarea label="Description of Business" value={biz.description} onChange={v => upBiz("description", v)} placeholder="Briefly describe your business operations..." required error={E} id="biz-desc" /></Row>
                 <Row><MoneySliderField label="Amount Requested" value={biz.amountRequested} onChange={v => upBiz("amountRequested", v)} placeholder="$250,000" half required min={10000} max={5000000} step={10000} error={E} id="biz-amount" /><MoneySliderField label="Annual Revenue" value={biz.annualRevenue} onChange={v => upBiz("annualRevenue", v)} placeholder="$1,500,000" half required min={0} max={50000000} step={50000} error={E} id="biz-revenue" /></Row>
@@ -511,7 +536,7 @@ export default function App() {
                     </div>
                     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
                       <Row><Field label="First Name" value={o.firstName} onChange={v => upOwner(idx, "firstName", v)} placeholder="John" half required error={E} id={`own${idx}-fn`} /><Field label="Last Name" value={o.lastName} onChange={v => upOwner(idx, "lastName", v)} placeholder="Smith" half required error={E} id={`own${idx}-ln`} /></Row>
-                      <Row><Field label="Date of Birth" value={o.dob} onChange={v => { upOwner(idx, "dob", v); checkBirthday(v); }} type="date" half required error={E} id={`own${idx}-dob`} /><SSNField label="SSN" value={o.ssn} onChange={v => upOwner(idx, "ssn", v)} half required error={E} id={`own${idx}-ssn`} /></Row>
+                      <Row><Field label="Date of Birth" value={o.dob} onChange={v => { const c = clampDateYear(v); upOwner(idx, "dob", c); checkBirthday(c); }} type="date" half required error={E} id={`own${idx}-dob`} /><SSNField label="SSN" value={o.ssn} onChange={v => upOwner(idx, "ssn", v)} half required error={E} id={`own${idx}-ssn`} /></Row>
                       <Row><NumSliderField label="% Ownership" value={o.ownership} onChange={v => upOwner(idx, "ownership", v)} placeholder="60" half required min={1} max={100} suffix="%" error={E} id={`own${idx}-own`} /><NumSliderField label="Credit Score" value={o.creditScore} onChange={v => upOwner(idx, "creditScore", v)} placeholder="720" half min={300} max={850} /></Row>
                       <Row><AddressField label="Address" value={o.address} onChange={v => upOwner(idx, "address", v)} onPlaceSelect={(p) => applyOwnerPlace(idx, p)} placeholder="456 Oak Avenue" required error={E} id={`own${idx}-addr`} /></Row>
                       <Row><Field label="City" value={o.city} onChange={v => upOwner(idx, "city", v)} placeholder="San Francisco" half required error={E} id={`own${idx}-city`} /><StateSelect value={o.state} onChange={v => upOwner(idx, "state", v)} half required error={E} id={`own${idx}-state`} /></Row>
