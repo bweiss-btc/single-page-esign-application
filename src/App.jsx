@@ -72,6 +72,28 @@ function isReasonableDate(value) {
   return y >= 1900 && y <= 2100;
 }
 
+// Returns the last N month names starting from the PREVIOUS month (skipping
+// the current month). Banks typically don't have current-month statements
+// available yet, so the application asks for the most recent N months that
+// have actually closed. e.g. on April 5, returns ["March", "February",
+// "January", "December"]. Replaces the default getMonthNames() which would
+// include the current month.
+function getPrevMonthNames(count) {
+  const months = ["January", "February", "March", "April", "May", "June",
+                  "July", "August", "September", "October", "November", "December"];
+  const now = new Date();
+  // Start from the month BEFORE current. getMonth() is 0-indexed.
+  const startMonth = now.getMonth() - 1;
+  const out = [];
+  for (let i = 0; i < count; i++) {
+    // Modulo with +12 handles negative wrap (e.g. January means previous month
+    // is December of last year).
+    const idx = ((startMonth - i) % 12 + 12) % 12;
+    out.push(months[idx]);
+  }
+  return out;
+}
+
 export default function App() {
   const isMobile = useIsMobile();
   const isSigned = getParam("signed") === "true";
@@ -83,7 +105,7 @@ export default function App() {
   const [docLoading, setDocLoading] = useState(false);
   const [docError, setDocError] = useState(null);
   const [page, setPage] = useState(isSigned ? "bank" : "form");
-  const [bankFiles, setBankFiles] = useState([null, null, null]);
+  const [bankFiles, setBankFiles] = useState([null, null, null, null]);
   const [bankUploading, setBankUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState("");
   const [agent, setAgent] = useState(null);
@@ -279,7 +301,7 @@ export default function App() {
   };
 
   const addBankSlot = () => setBankFiles(p => [...p, null]);
-  const requiredBankCount = 3;
+  const requiredBankCount = 4;
 
   const handleBankFileInput = (i, fileList) => {
     const files = Array.from(fileList);
@@ -333,7 +355,9 @@ export default function App() {
   const E = hasError;
 
   if (page === "bank") {
-    const monthNames = getMonthNames(requiredBankCount);
+    // Use prev-month names (skips current month) since banks usually don't have
+    // current-month statements available yet. For April, this returns Mar/Feb/Jan/Dec.
+    const monthNames = getPrevMonthNames(requiredBankCount);
     return (
       <div style={{ minHeight: "100vh", background: "#f1f5f9", fontFamily: "'Plus Jakarta Sans',sans-serif", ...bottomPad }}>
         <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
@@ -341,11 +365,11 @@ export default function App() {
         <TopBar />
         <div style={{ maxWidth: 680, margin: "0 auto", padding: "24px 12px 0" }}>
           <div className="form-card" style={{ background: "#fff", borderRadius: 16, overflow: "hidden", boxShadow: "0 1px 3px rgba(0,0,0,0.05),0 8px 30px rgba(0,0,0,0.06)" }}>
-            <SH title="Upload Bank Statements" subtitle="Please upload your last 3 months of business bank statements" />
+            <SH title="Upload Bank Statements" subtitle="Please upload your last 4 months of business bank statements" />
             <div className="form-pad" style={{ padding: "20px 24px 24px", display: "flex", flexDirection: "column", gap: 14 }}>
               {bankFiles.map((f, i) => {
                 const isReq = i < requiredBankCount;
-                const label = i < requiredBankCount ? (i === 0 ? `${monthNames[0]} (Most Recent)` : monthNames[i]) : `Additional Doc ${i - 2}`;
+                const label = i < requiredBankCount ? (i === 0 ? `${monthNames[0]} (Most Recent)` : monthNames[i]) : `Additional Doc ${i - 3}`;
                 return (
                   <div key={i}>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 5 }}>
@@ -363,8 +387,8 @@ export default function App() {
               <button className="add-doc-btn" onClick={addBankSlot} style={{ width: "100%", marginTop: 4, padding: "18px 20px", border: "2px dashed " + NV2, borderRadius: 14, background: "#eef5fa", color: NV1, fontSize: 14.5, fontWeight: 800, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 12, transition: "all 0.18s ease", letterSpacing: "0.01em" }}>
                 <div className="add-doc-plus" style={{ width: 32, height: 32, borderRadius: "50%", background: `linear-gradient(135deg,${NV1},${NV2})`, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, fontWeight: 700, flexShrink: 0, lineHeight: 1, boxShadow: "0 2px 8px rgba(10,25,41,0.22)", animation: "pulseGlow 2.4s ease-in-out infinite", transition: "transform 0.25s ease" }}>+</div>
                 <span style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 2 }}>
-                  <span style={{ lineHeight: 1.2 }}>Add Another Document</span>
-                  <span style={{ fontSize: 11, fontWeight: 500, color: "#64748b", letterSpacing: 0 }}>Upload additional statements or supporting docs</span>
+                  <span style={{ lineHeight: 1.2 }}>Add Other Documents</span>
+                  <span style={{ fontSize: 11, fontWeight: 500, color: "#64748b", letterSpacing: 0 }}>Each slot can hold multiple files (tax returns, voided checks, etc.)</span>
                 </span>
               </button>
               {bankErrors && <p style={errStyle}>{bankErrors}</p>}
