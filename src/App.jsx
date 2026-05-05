@@ -165,6 +165,18 @@ export default function App() {
   const [modal, setModal] = useState(null);
   const [bankErrors, setBankErrors] = useState("");
 
+  // Signature verification gate. When isSigned is true (URL has ?signed=true),
+  // we don't trust that flag alone — we hit our /api/create-submission?verify=signature
+  // endpoint which checks BTC-Sign's API to confirm the submission actually exists
+  // and Owner 1 has status=completed AND email matches the customer who submitted.
+  // If verification fails, the bank upload form is locked behind a clear error.
+  // Without this, anyone who lands on /?signed=true (typed it, hit refresh, came
+  // back from history) bypasses signing entirely and can upload bank statements
+  // for an unsigned application.
+  const [verifying, setVerifying] = useState(isSigned);
+  const [verifyFailed, setVerifyFailed] = useState(false);
+  const [verifyReason, setVerifyReason] = useState(null);
+
   const [biz, setBiz] = useState({ name: "", dba: "", startDate: "", entity: "", industry: "", taxId: "", description: "", amountRequested: "", annualRevenue: "", useOfProceeds: "", product: "", address: "", city: "", state: "", zip: "", website: "", phone: "", ownRealEstate: "", openLoans: "" });
   const [owners, setOwners] = useState([emptyOwner()]);
 
@@ -259,6 +271,57 @@ export default function App() {
       }).catch(() => {});
     }
   }, []);
+
+  // Verify the customer actually completed signing in BTC-Sign before showing
+  // the bank upload form. The server endpoint hits BTC-Sign's API to confirm
+  // the submission exists, Owner 1 has status=completed, and the email matches.
+  // Defense in depth: requires both sid (from the redirect URL) AND a stored
+  // email (from sessionStorage, set when they first entered email on landing).
+  useEffect(() => {
+    if (!isSigned) return;
+    const sid = getParam("sid");
+    let storedEmail = "";
+    try { storedEmail = sessionStorage.getItem("btc_email") || ""; } catch (e) {}
+
+    // No sid in URL? Can't verify. Treat as a bypass attempt.
+    if (!sid) {
+      setVerifying(false);
+      setVerifyFailed(true);
+      setVerifyReason("missing_sid");
+      return;
+    }
+
+    const url = "/api/create-submission?verify=signature&sid=" + encodeURIComponent(sid)
+      + (storedEmail ? "&email=" + encodeURIComponent(storedEmail) : "");
+    fetch(url)
+      .then(r => r.json())
+      .then(d => {
+        if (d && d.verified === true) {
+          setVerifying(false);
+          setVerifyFailed(false);
+          setVerifyReason(null);
+        } else {
+          setVerifying(false);
+          setVerifyFailed(true);
+          setVerifyReason((d && d.reason) || "not_verified");
+        }
+      })
+      .catch(() => {
+        // On network/server error, fail closed. Better to show "please complete
+        // signing" to a legitimately-signed customer (they can refresh) than to
+        // let an unsigned customer through.
+        setVerifying(false);
+        setVerifyFailed(true);
+        setVerifyReason("network_error");
+      });
+  }, [isSigned]);
+
+  // Returns the user to the start of the application, preserving the agent slug.
+  const restartApplication = () => {
+    const slug = getAgentSlug();
+    const origin = typeof window !== "undefined" ? window.location.origin : "";
+    window.location.href = slug ? origin + "/?agent=" + encodeURIComponent(slug) : origin + "/";
+  };
 
   const initDocuSeal = useCallback(async () => {
     setDocLoading(true); setDocError(null);
@@ -369,7 +432,13 @@ export default function App() {
   };
 
   // Bank upload routes through /api/upload-bank (Vercel multipart proxy).
+  // Belt-and-suspenders: also blocks if verification hasn't completed or failed,
+  // even though the UI hides the submit button in those cases.
   const handleBankSubmit = async () => {
+    if (verifying || verifyFailed) {
+      setBankErrors("Signature not verified. Please complete the signing process first.");
+      return;
+    }
     const missing = bankFiles.slice(0, requiredBankCount).filter(f => !f).length;
     if (missing > 0) { setBankErrors(`First ${requiredBankCount} months are required`); return; }
     setBankErrors(""); setBankUploading(true); setUploadProgress("Uploading...");
@@ -384,6 +453,10 @@ export default function App() {
       if (agentParam) { fd.append("agent_param", agentParam); fd.append("slug", agentParam); }
       fd.append("link_url", getLinkUrl());
       if (_agentData) fd.append("agent_info", JSON.stringify(_agentData));
+      // Include the verified submission_id so n8n can join bank statements
+      // back to the original signed application.
+      const sid = getParam("sid");
+      if (sid) fd.append("submission_id", sid);
       fd.append("total_files", String(validFiles.length));
       validFiles.forEach((file, i) => { fd.append(`file_${i}`, file, file.name); });
       const res = await fetch("/api/upload-bank", { method: "POST", body: fd });
@@ -414,35 +487,82 @@ export default function App() {
         <TopBar />
         <div style={{ maxWidth: 680, margin: "0 auto", padding: "24px 12px 0" }}>
           <div className="form-card" style={{ background: "#fff", borderRadius: 16, overflow: "hidden", boxShadow: "0 1px 3px rgba(0,0,0,0.05),0 8px 30px rgba(0,0,0,0.06)" }}>
-            <SH title="Upload Bank Statements" subtitle="Please upload your last 4 months of business bank statements" />
-            <div className="form-pad" style={{ padding: "20px 24px 24px", display: "flex", flexDirection: "column", gap: 14 }}>
-              {bankFiles.map((f, i) => {
-                const isReq = i < requiredBankCount;
-                const label = i < requiredBankCount ? (i === 0 ? `${monthNames[0]} (Most Recent)` : monthNames[i]) : `Additional Doc ${i - 3}`;
-                return (
-                  <div key={i}>
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 5 }}>
-                      <label style={{ fontSize: 12.5, fontWeight: 600, color: "#4a5568" }}>{label}{isReq && <span style={{ color: "#d64545", marginLeft: 4 }}>*</span>}</label>
-                      {i >= requiredBankCount && <button onClick={() => setBankFiles(p => p.filter((_, j) => j !== i))} style={{ background: "none", border: "none", color: "#d64545", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>Remove</button>}
-                    </div>
-                    <div style={{ border: "2px dashed " + (f ? NV3 : isReq && bankErrors ? "#d64545" : "#dde1e7"), borderRadius: 10, padding: "12px 14px", background: f ? "#f0f4f8" : "#fff", display: "flex", alignItems: "center", gap: 10 }}>
-                      <input type="file" accept=".pdf,.png,.jpg,.jpeg" multiple={i === 0} onChange={e => handleBankFileInput(i, e.target.files)} style={{ flex: 1, fontSize: 12, minWidth: 0 }} />
-                      {f && <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}><span style={{ fontSize: 10, color: "#64748b" }}>{(f.size / 1024).toFixed(0)}KB</span><span style={{ color: NV3, fontWeight: 600, fontSize: 14 }}>{"\u2713"}</span></div>}
-                    </div>
+            {verifying && (
+              <div style={{ padding: "60px 24px", textAlign: "center" }}>
+                <div style={{ width: 40, height: 40, border: "3px solid #e2e8f0", borderTopColor: NV2, borderRadius: "50%", animation: "spin 0.8s linear infinite", margin: "0 auto 16px" }} />
+                <p style={{ fontSize: 15, fontWeight: 600, color: "#1a202c", marginBottom: 4 }}>Verifying your signature...</p>
+                <p style={{ fontSize: 12, color: "#94a3b8" }}>Just a moment while we confirm everything is in order</p>
+              </div>
+            )}
+            {!verifying && verifyFailed && (
+              <div style={{ padding: "40px 28px", textAlign: "center" }}>
+                <div style={{ width: 56, height: 56, borderRadius: "50%", margin: "0 auto 18px", background: "#fef2f2", border: "1.5px solid #fecaca", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#dc2626" strokeWidth="2.4">
+                    <path d="M12 9v4M12 17h.01" />
+                    <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                  </svg>
+                </div>
+                <h2 style={{ fontSize: 20, fontWeight: 800, color: "#1a202c", margin: "0 0 8px" }}>Signature Not Confirmed</h2>
+                <p style={{ fontSize: 14, color: "#64748b", lineHeight: 1.65, margin: "0 0 18px" }}>
+                  We couldn't verify that the funding application has been signed yet. Bank statements can only be uploaded after signing is complete.
+                </p>
+                <p style={{ fontSize: 13, color: "#64748b", lineHeight: 1.65, margin: "0 0 24px", padding: "12px 16px", background: "#f8fafc", borderRadius: 10, border: "1px solid #e2e8f0" }}>
+                  If you've already signed, please contact your funding expert{agent ? ` (${agent.Name})` : ""} so we can sort this out.
+                </p>
+                <button onClick={restartApplication} style={{ padding: "12px 28px", borderRadius: 10, border: "none", background: btnGrad, color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer", boxShadow: "0 4px 14px rgba(10,25,41,0.3)" }}>
+                  Start the Application
+                </button>
+                {agent && (agent.Phone || agent.Email) && (
+                  <div style={{ marginTop: 24, paddingTop: 20, borderTop: "1px solid #e2e8f0", display: "flex", gap: 8, justifyContent: "center", flexWrap: "wrap" }}>
+                    {agent.Phone && (
+                      <a href={"tel:" + agent.Phone} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "9px 16px", background: "#fff", border: "1.5px solid #cbd5e1", borderRadius: 10, textDecoration: "none", color: NV2, fontSize: 13, fontWeight: 600 }}>
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={NV2} strokeWidth="2"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.79 19.79 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z"/></svg>
+                        Call {agent.Name}
+                      </a>
+                    )}
+                    {agent.Email && (
+                      <a href={"mailto:" + agent.Email} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "9px 16px", background: "#fff", border: "1.5px solid #cbd5e1", borderRadius: 10, textDecoration: "none", color: NV2, fontSize: 13, fontWeight: 600 }}>
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={NV2} strokeWidth="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M22 4l-10 8L2 4"/></svg>
+                        Email
+                      </a>
+                    )}
                   </div>
-                );
-              })}
-              <p style={{ fontSize: 11, color: "#94a3b8", margin: "0 0 -4px", textAlign: "center" }}>Tip: Click the first slot to upload multiple statements at once</p>
-              <button className="add-doc-btn" onClick={addBankSlot} style={{ width: "100%", marginTop: 4, padding: "18px 20px", border: "2px dashed " + NV2, borderRadius: 14, background: "#eef5fa", color: NV1, fontSize: 14.5, fontWeight: 800, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 12, transition: "all 0.18s ease", letterSpacing: "0.01em" }}>
-                <div className="add-doc-plus" style={{ width: 32, height: 32, borderRadius: "50%", background: `linear-gradient(135deg,${NV1},${NV2})`, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, fontWeight: 700, flexShrink: 0, lineHeight: 1, boxShadow: "0 2px 8px rgba(10,25,41,0.22)", animation: "pulseGlow 2.4s ease-in-out infinite", transition: "transform 0.25s ease" }}>+</div>
-                <span style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 2 }}>
-                  <span style={{ lineHeight: 1.2 }}>Add Other Documents</span>
-                  <span style={{ fontSize: 11, fontWeight: 500, color: "#64748b", letterSpacing: 0 }}>Each slot can hold multiple files (tax returns, voided checks, etc.)</span>
-                </span>
-              </button>
-              {bankErrors && <p style={errStyle}>{bankErrors}</p>}
-              <button onClick={handleBankSubmit} disabled={bankUploading} style={{ width: "100%", padding: "13px", borderRadius: 12, border: "none", background: btnGrad, color: "#fff", fontSize: 14, fontWeight: 700, cursor: bankUploading ? "not-allowed" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>{bankUploading ? <><div style={{ width: 16, height: 16, border: "2px solid rgba(255,255,255,0.3)", borderTopColor: "#fff", borderRadius: "50%", animation: "spin 0.7s linear infinite" }} />{uploadProgress}</> : "Submit Bank Statements"}</button>
-            </div>
+                )}
+              </div>
+            )}
+            {!verifying && !verifyFailed && (
+              <>
+                <SH title="Upload Bank Statements" subtitle="Please upload your last 4 months of business bank statements" />
+                <div className="form-pad" style={{ padding: "20px 24px 24px", display: "flex", flexDirection: "column", gap: 14 }}>
+                  {bankFiles.map((f, i) => {
+                    const isReq = i < requiredBankCount;
+                    const label = i < requiredBankCount ? (i === 0 ? `${monthNames[0]} (Most Recent)` : monthNames[i]) : `Additional Doc ${i - 3}`;
+                    return (
+                      <div key={i}>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 5 }}>
+                          <label style={{ fontSize: 12.5, fontWeight: 600, color: "#4a5568" }}>{label}{isReq && <span style={{ color: "#d64545", marginLeft: 4 }}>*</span>}</label>
+                          {i >= requiredBankCount && <button onClick={() => setBankFiles(p => p.filter((_, j) => j !== i))} style={{ background: "none", border: "none", color: "#d64545", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>Remove</button>}
+                        </div>
+                        <div style={{ border: "2px dashed " + (f ? NV3 : isReq && bankErrors ? "#d64545" : "#dde1e7"), borderRadius: 10, padding: "12px 14px", background: f ? "#f0f4f8" : "#fff", display: "flex", alignItems: "center", gap: 10 }}>
+                          <input type="file" accept=".pdf,.png,.jpg,.jpeg" multiple={i === 0} onChange={e => handleBankFileInput(i, e.target.files)} style={{ flex: 1, fontSize: 12, minWidth: 0 }} />
+                          {f && <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}><span style={{ fontSize: 10, color: "#64748b" }}>{(f.size / 1024).toFixed(0)}KB</span><span style={{ color: NV3, fontWeight: 600, fontSize: 14 }}>{"\u2713"}</span></div>}
+                        </div>
+                      </div>
+                    );
+                  })}
+                  <p style={{ fontSize: 11, color: "#94a3b8", margin: "0 0 -4px", textAlign: "center" }}>Tip: Click the first slot to upload multiple statements at once</p>
+                  <button className="add-doc-btn" onClick={addBankSlot} style={{ width: "100%", marginTop: 4, padding: "18px 20px", border: "2px dashed " + NV2, borderRadius: 14, background: "#eef5fa", color: NV1, fontSize: 14.5, fontWeight: 800, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 12, transition: "all 0.18s ease", letterSpacing: "0.01em" }}>
+                    <div className="add-doc-plus" style={{ width: 32, height: 32, borderRadius: "50%", background: `linear-gradient(135deg,${NV1},${NV2})`, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, fontWeight: 700, flexShrink: 0, lineHeight: 1, boxShadow: "0 2px 8px rgba(10,25,41,0.22)", animation: "pulseGlow 2.4s ease-in-out infinite", transition: "transform 0.25s ease" }}>+</div>
+                    <span style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 2 }}>
+                      <span style={{ lineHeight: 1.2 }}>Add Other Documents</span>
+                      <span style={{ fontSize: 11, fontWeight: 500, color: "#64748b", letterSpacing: 0 }}>Each slot can hold multiple files (tax returns, voided checks, etc.)</span>
+                    </span>
+                  </button>
+                  {bankErrors && <p style={errStyle}>{bankErrors}</p>}
+                  <button onClick={handleBankSubmit} disabled={bankUploading} style={{ width: "100%", padding: "13px", borderRadius: 12, border: "none", background: btnGrad, color: "#fff", fontSize: 14, fontWeight: 700, cursor: bankUploading ? "not-allowed" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>{bankUploading ? <><div style={{ width: 16, height: 16, border: "2px solid rgba(255,255,255,0.3)", borderTopColor: "#fff", borderRadius: "50%", animation: "spin 0.7s linear infinite" }} />{uploadProgress}</> : "Submit Bank Statements"}</button>
+                </div>
+              </>
+            )}
           </div>
           <Footer />
         </div>
