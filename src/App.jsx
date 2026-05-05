@@ -9,18 +9,67 @@ let _agentData = null;
 let _email = (() => { try { return sessionStorage.getItem("btc_email") || ""; } catch (e) { return ""; } })();
 let _honeypot = "";
 
+// The agent slug must survive every leg of the journey: form steps, BTC-Sign
+// redirect, bank upload, etc. We can't rely on the URL alone — BTC-Sign's
+// template-default redirect can drop our query string, browsers strip params
+// on some redirect chains, and customers occasionally edit the URL bar. So:
+//
+//   1. On first sight (URL has ?agent=X), persist to sessionStorage.
+//   2. On subsequent reads, prefer the URL but fall back to sessionStorage.
+//   3. Whenever we know a slug but the URL doesn't reflect it, repair the URL
+//      via history.replaceState (no reload, no flash, just rewrites the bar).
+//
+// Result: the slug is sticky for the whole session and every outbound payload
+// that calls getAgentSlug() gets it, no matter what BTC-Sign or the browser does.
+let _agentSlugCached = null;
+let _agentSlugReady = false;
+function getAgentSlug() {
+  if (typeof window === "undefined") return "";
+  if (_agentSlugReady) return _agentSlugCached || "";
+  _agentSlugReady = true;
+
+  let slug = "";
+  try {
+    const params = new URLSearchParams(window.location.search);
+    slug = (params.get("agent") || "").trim();
+  } catch (e) {}
+
+  if (!slug) {
+    try { slug = (sessionStorage.getItem("btc_agent") || "").trim(); } catch (e) {}
+  }
+
+  if (slug) {
+    try { sessionStorage.setItem("btc_agent", slug); } catch (e) {}
+    try {
+      const url = new URL(window.location.href);
+      if (url.searchParams.get("agent") !== slug) {
+        url.searchParams.set("agent", slug);
+        window.history.replaceState({}, "", url.toString());
+      }
+    } catch (e) {}
+  }
+
+  _agentSlugCached = slug;
+  return slug;
+}
+
+// Run once at module load so the URL bar is repaired BEFORE any React render —
+// this way the customer never sees a flash of the unpatched URL even when
+// BTC-Sign drops the slug on its redirect.
+if (typeof window !== "undefined") { getAgentSlug(); }
+
 // Canonical link URL for this visitor. Always includes the agent slug if one's
-// present on the page so every outbound payload carries the same shareable URL.
+// present so every outbound payload carries the same shareable URL.
 function getLinkUrl() {
   if (typeof window === "undefined") return "";
-  const slug = getParam("agent");
+  const slug = getAgentSlug();
   const origin = window.location.origin;
   return slug ? origin + "/?agent=" + encodeURIComponent(slug) : origin + "/";
 }
 
 function sendWebhook(data) {
   try {
-    const slug = getParam("agent") || undefined;
+    const slug = getAgentSlug() || undefined;
     fetch("/api/create-submission?proxy=webhook", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ...data, email: data.email || _email, timestamp: new Date().toISOString(), agent_param: slug, slug, link_url: getLinkUrl(), agent_info: _agentData || undefined }) });
   } catch (e) {}
@@ -203,7 +252,7 @@ export default function App() {
   };
 
   useEffect(() => {
-    const a = getParam("agent");
+    const a = getAgentSlug();
     if (a) {
       fetch("/api/create-submission?agent=" + encodeURIComponent(a)).then(r => r.json()).then(raw => {
         const ag = normalizeAgent(raw); if (ag) { setAgent(ag); _agentData = ag; }
@@ -214,7 +263,7 @@ export default function App() {
   const initDocuSeal = useCallback(async () => {
     setDocLoading(true); setDocError(null);
     try {
-      const slug = getParam("agent") || undefined;
+      const slug = getAgentSlug() || undefined;
       const res = await fetch("/api/create-submission", { method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ business: { ...biz, taxId: rawTaxId(biz.taxId), phone: rawPhone(biz.phone), amountRequested: rawMoney(biz.amountRequested), annualRevenue: rawMoney(biz.annualRevenue) }, owners: owners.map(o => ({ ...o, cell: rawPhone(o.cell) })), email, slug, agent_param: slug, link_url: getLinkUrl(), agent_info: _agentData || undefined, _company_url: _honeypot }) });
       const data = await res.json();
@@ -231,7 +280,7 @@ export default function App() {
     sendWebhook({ event: "email_entered", step: "email", email });
     setLoading(true);
     try {
-      const agentParam = getParam("agent");
+      const agentParam = getAgentSlug();
       const linkUrl = getLinkUrl();
       const extraQ = (agentParam ? "&slug=" + encodeURIComponent(agentParam) : "")
         + (linkUrl ? "&link_url=" + encodeURIComponent(linkUrl) : "");
@@ -331,7 +380,7 @@ export default function App() {
       fd.append("step", "bank_upload");
       fd.append("email", _email || "");
       fd.append("timestamp", new Date().toISOString());
-      const agentParam = getParam("agent");
+      const agentParam = getAgentSlug();
       if (agentParam) { fd.append("agent_param", agentParam); fd.append("slug", agentParam); }
       fd.append("link_url", getLinkUrl());
       if (_agentData) fd.append("agent_info", JSON.stringify(_agentData));
