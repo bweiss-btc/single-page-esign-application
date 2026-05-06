@@ -90,11 +90,12 @@ export default async function handler(req, res) {
     // upload bank statements. Without this check, anyone could navigate directly to
     // /?signed=true and bypass the signature.
     //
-    // Defense in depth: requires BOTH submission_id (from localStorage, set during
+    // Defense in depth: requires BOTH submission_id (from sessionStorage, set during
     // submission creation) AND email (from sessionStorage). Server checks DocuSeal
-    // for the submission, confirms Owner 1 has status=completed, and that the email
-    // matches the submitter's email. Even if someone guessed a numeric submission_id,
-    // they'd need the right email too.
+    // for the submission, confirms ALL submitters have status=completed (so a 2-owner
+    // submission can't bypass with just Owner 1 signing), and that the email matches
+    // the Owner 1 submitter. Even if someone guessed a numeric submission_id, they'd
+    // need the right email too.
     if (req.query.verify === "signature") {
       const { DOCUSEAL_BASE_ENDPOINT: baseEndpoint, DOCUSEAL_API_KEY: apiKey } = process.env;
       if (!baseEndpoint || !apiKey) {
@@ -113,21 +114,47 @@ export default async function handler(req, res) {
         }
         const sub = await r.json();
         const submitters = Array.isArray(sub.submitters) ? sub.submitters : [];
-        // Owner 1 is the in-browser signer (their completion is what triggers the
-        // redirect back to our app). Owner 2 may still be pending.
+
+        // ALL submitters must be completed. For a 2-owner submission, this means
+        // both Owner 1 and Owner 2. If only Owner 1 has signed (e.g. they hit the
+        // chain redirect to Owner 2's signing page but Owner 2 abandoned), this
+        // returns not_completed and the bank upload stays locked.
+        const allCompleted = submitters.length > 0 && submitters.every(s =>
+          s && (s.status === "completed" || s.completed_at)
+        );
+
+        // Email match is against Owner 1 (the in-browser signer who initiated
+        // the flow and stored their email in sessionStorage). Owner 2's email
+        // is generally different and we don't try to match it.
         const owner1 = submitters.find(s => s && s.role === "Owner 1") || submitters[0];
-        const isCompleted = !!(owner1 && (owner1.status === "completed" || owner1.completed_at));
         const submitterEmail = (owner1?.email || "").toLowerCase();
-        // Email must match if provided. If client didn't send one, fall back to
-        // submission_id-only check (less strict but still requires the right ID).
         const emailMatches = !emailRaw || emailRaw === submitterEmail;
-        const verified = isCompleted && emailMatches;
+        const verified = allCompleted && emailMatches;
+
+        // Distinguish "Owner 2 specifically hasn't finished" vs Owner 1 not done,
+        // so the client can show a helpful message if needed.
+        let reason = null;
+        if (!verified) {
+          if (!allCompleted) {
+            const owner1Done = !!(owner1 && (owner1.status === "completed" || owner1.completed_at));
+            const owner2 = submitters.find(s => s && s.role === "Owner 2");
+            const owner2Done = !!(owner2 && (owner2.status === "completed" || owner2.completed_at));
+            if (submitters.length > 1 && owner1Done && !owner2Done) {
+              reason = "owner2_not_completed";
+            } else {
+              reason = "not_completed";
+            }
+          } else {
+            reason = "email_mismatch";
+          }
+        }
+
         return res.status(200).json({
           verified,
           email: verified ? submitterEmail : null,
           submission_id: sub.id || sidRaw,
           slug: (sub.metadata && sub.metadata.slug) || null,
-          reason: verified ? null : (!isCompleted ? "not_completed" : "email_mismatch")
+          reason
         });
       } catch (e) {
         return res.status(200).json({ verified: false, reason: "error" });
@@ -332,10 +359,15 @@ export default async function handler(req, res) {
       if (o2Fields) safeO2 = o2Fields.filter(f => known.has(f.name));
     }
 
-    // Include {{submission_id}} template token. DocuSeal will substitute the actual
-    // ID at redirect time. If unsupported by the DocuSeal version, the literal
-    // string lands in the URL — App.jsx detects and ignores that, falling back to
-    // localStorage which we also set client-side before redirect.
+    // Default redirect URL — used by the FINAL signer (whoever is last in the
+    // chain). For a single-owner submission, that's Owner 1. For two owners,
+    // we'll override Owner 1's redirect AFTER creation to point to Owner 2's
+    // signing URL, so this URL ends up being Owner 2's terminal redirect.
+    //
+    // Includes {{submission_id}} template token. DocuSeal will substitute the
+    // actual ID at redirect time. If unsupported by the DocuSeal version, the
+    // literal string lands in the URL — App.jsx detects and ignores that,
+    // falling back to sessionStorage which we also set client-side before redirect.
     const redirectUrl = APP_URL + "/?signed=true&sid={{submission_id}}" + (slug ? "&agent=" + encodeURIComponent(slug) : "");
 
     const snapshotMetadata = {
@@ -347,6 +379,12 @@ export default async function handler(req, res) {
       owners: scrubForMetadata({ owners }).owners || null
     };
 
+    // Both owners get send_email: false. With the chain (Owner 1 → Owner 2 →
+    // bank upload), Owner 2 doesn't need a separate email — they sign right
+    // after Owner 1 on the same device. If the chain breaks (Owner 2 walks
+    // away mid-flow, browser closes, etc.), the verify endpoint catches it
+    // and the customer is told their signature is incomplete; the funding
+    // expert can manually re-send via BTC-Sign UI if needed.
     const submitters = [{
       email: ownerEmail || "applicant@example.com",
       role: "Owner 1",
@@ -361,7 +399,7 @@ export default async function handler(req, res) {
         role: "Owner 2",
         fields: safeO2,
         completed_redirect_url: redirectUrl,
-        send_email: true,
+        send_email: false,
         metadata: { ...snapshotMetadata, submitter_role: "owner_2" }
       });
     }
@@ -378,7 +416,34 @@ export default async function handler(req, res) {
     try { data = JSON.parse(responseText); } catch (e) { return res.status(500).json({ error: "Invalid JSON" }); }
     const submitterList = Array.isArray(data) ? data : [data];
     const owner1Sub = submitterList.find(s => s && s.role === "Owner 1") || submitterList[0];
+    const owner2Sub = submitterList.find(s => s && s.role === "Owner 2");
     if (!owner1Sub?.slug) return res.status(500).json({ error: "No slug returned" });
+
+    // CHAINED SIGNING: if there's an Owner 2, after Owner 1 signs we want them
+    // redirected straight to Owner 2's signing page (not back to our app).
+    // We do this by PATCHing Owner 1's submitter record to override the
+    // completed_redirect_url with Owner 2's signing URL. Owner 2's redirect
+    // stays as the original (our app's ?signed=true page), so when both have
+    // signed, the customer ends up on the bank upload page.
+    //
+    // Failure mode: if this PATCH fails, Owner 1 falls back to the original
+    // redirect (our app), and the verify endpoint will fail because Owner 2
+    // hasn't signed. The customer sees "Signature Not Confirmed" and contacts
+    // their funding expert — graceful degradation.
+    if (owner2Sub?.slug && owner1Sub?.id) {
+      const owner2SigningUrl = DOCUSEAL_BASE_ENDPOINT + "/s/" + owner2Sub.slug;
+      try {
+        await fetch(DOCUSEAL_BASE_ENDPOINT + "/api/submitters/" + owner1Sub.id, {
+          method: "PUT",
+          headers: { "X-Auth-Token": DOCUSEAL_API_KEY, "Content-Type": "application/json" },
+          body: JSON.stringify({ completed_redirect_url: owner2SigningUrl })
+        });
+      } catch (e) {
+        // Log but don't fail — see comment above for failure mode.
+        console.log("Owner 1 redirect chain update failed:", e.message);
+      }
+    }
+
     // The submission_id is what we'll use for client-side signature verification
     // after the DocuSeal flow completes.
     const submissionId = owner1Sub.submission_id || owner1Sub.id || null;
