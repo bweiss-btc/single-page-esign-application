@@ -820,10 +820,7 @@ export default function App() {
             </div>
           )}
         </div>
-        <div className="nav-btns" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0 2px" }}>
-          {step > 0 ? (
-            <button onClick={() => { setDocError(null); setDocLoading(false); setHasError(false); setModal(null); goTo(step - 1); }} style={{ padding: "11px 22px", borderRadius: 10, border: "1.5px solid #cbd5e1", background: "#fff", color: "#475569", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>{"\u2190"} Back</button>
-          ) : <div />}
+        <div className="nav-btns" style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", padding: "0 2px" }}>
           {step < 2 && (
             <button onClick={() => {
               if (step === 0) { if (!validateBiz()) return; sendWebhook({ event: "business_info_completed", step: "business_info", email, business: normalizeBiz(biz) }); }
