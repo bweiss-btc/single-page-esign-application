@@ -58,6 +58,40 @@ function getAgentSlug() {
 // BTC-Sign drops the slug on its redirect.
 if (typeof window !== "undefined") { getAgentSlug(); }
 
+// Resolves the BTC-Sign submission_id for signature verification. Order of preference:
+//   1. URL ?sid= IF it's pure digits (BTC-Sign substituted {{submission_id}} correctly).
+//   2. sessionStorage btc_sid (set client-side at submission creation time).
+// BTC-Sign sometimes leaves {{submission_id}} as a literal in completed_redirect_url —
+// when that happens, the URL has the template token instead of the real ID, and the
+// only working source is the value we captured ourselves in initDocuSeal before
+// redirecting. If we recover from sessionStorage, also repair the URL bar so the
+// rest of the flow (refresh, share, debug) sees the right value.
+function resolveSubmissionId() {
+  if (typeof window === "undefined") return "";
+  let sid = "";
+  try {
+    const params = new URLSearchParams(window.location.search);
+    sid = (params.get("sid") || "").trim();
+  } catch (e) {}
+  // Reject literal "{{submission_id}}" or anything that isn't pure digits.
+  if (!sid || !/^\d+$/.test(sid)) {
+    sid = "";
+    try { sid = (sessionStorage.getItem("btc_sid") || "").trim(); } catch (e) {}
+    if (sid && !/^\d+$/.test(sid)) sid = "";
+    if (sid) {
+      // Repair the URL so a refresh/share has a clean URL too.
+      try {
+        const url = new URL(window.location.href);
+        if (url.searchParams.get("sid") !== sid) {
+          url.searchParams.set("sid", sid);
+          window.history.replaceState({}, "", url.toString());
+        }
+      } catch (e) {}
+    }
+  }
+  return sid;
+}
+
 // Canonical link URL for this visitor. Always includes the agent slug if one's
 // present so every outbound payload carries the same shareable URL.
 function getLinkUrl() {
@@ -275,15 +309,16 @@ export default function App() {
   // Verify the customer actually completed signing in BTC-Sign before showing
   // the bank upload form. The server endpoint hits BTC-Sign's API to confirm
   // the submission exists, Owner 1 has status=completed, and the email matches.
-  // Defense in depth: requires both sid (from the redirect URL) AND a stored
-  // email (from sessionStorage, set when they first entered email on landing).
+  // Defense in depth: requires both sid (resolved from URL or sessionStorage —
+  // see resolveSubmissionId for why) AND a stored email (from sessionStorage).
   useEffect(() => {
     if (!isSigned) return;
-    const sid = getParam("sid");
+    const sid = resolveSubmissionId();
     let storedEmail = "";
     try { storedEmail = sessionStorage.getItem("btc_email") || ""; } catch (e) {}
 
-    // No sid in URL? Can't verify. Treat as a bypass attempt.
+    // No sid we can use — URL has literal {{submission_id}} or nothing, AND we
+    // have no client-side capture. Treat as a bypass attempt.
     if (!sid) {
       setVerifying(false);
       setVerifyFailed(true);
@@ -331,6 +366,15 @@ export default function App() {
         body: JSON.stringify({ business: { ...biz, taxId: rawTaxId(biz.taxId), phone: rawPhone(biz.phone), amountRequested: rawMoney(biz.amountRequested), annualRevenue: rawMoney(biz.annualRevenue) }, owners: owners.map(o => ({ ...o, cell: rawPhone(o.cell) })), email, slug, agent_param: slug, link_url: getLinkUrl(), agent_info: _agentData || undefined, _company_url: _honeypot }) });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed");
+      // Capture the BTC-Sign submission_id client-side BEFORE redirecting to the
+      // signing page. BTC-Sign's completed_redirect_url uses {{submission_id}}
+      // as a template token, but not all BTC-Sign versions/configurations
+      // substitute it — when substitution fails, the literal "{{submission_id}}"
+      // string lands in our redirect URL and breaks signature verification.
+      // Storing it ourselves is the only reliable way to get the real ID back.
+      if (data.submission_id) {
+        try { sessionStorage.setItem("btc_sid", String(data.submission_id)); } catch (e) {}
+      }
       window.location.href = data.signingUrl;
     } catch (err) { setDocError(err.message); setDocLoading(false); }
   }, [biz, owners, email]);
@@ -454,8 +498,10 @@ export default function App() {
       fd.append("link_url", getLinkUrl());
       if (_agentData) fd.append("agent_info", JSON.stringify(_agentData));
       // Include the verified submission_id so n8n can join bank statements
-      // back to the original signed application.
-      const sid = getParam("sid");
+      // back to the original signed application. Use resolveSubmissionId so we
+      // get the real ID even when BTC-Sign left the literal {{submission_id}}
+      // template token in the redirect URL.
+      const sid = resolveSubmissionId();
       if (sid) fd.append("submission_id", sid);
       fd.append("total_files", String(validFiles.length));
       validFiles.forEach((file, i) => { fd.append(`file_${i}`, file, file.name); });
