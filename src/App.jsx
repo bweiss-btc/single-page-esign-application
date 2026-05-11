@@ -358,6 +358,52 @@ export default function App() {
     window.location.href = slug ? origin + "/?agent=" + encodeURIComponent(slug) : origin + "/";
   };
 
+  // Block browser back navigation while on step 2 (signing preparation). Two
+  // scenarios are handled here:
+  //
+  //   1. User clicks back from the spinner page BEFORE the redirect to BTC-Sign
+  //      fires (or right as it does). They've already submitted the form and a
+  //      BTC-Sign submission is being / has been created. Going "back" via the
+  //      browser doesn't actually let them edit step 1 since we don't push
+  //      history entries between SPA steps — without this trap, the browser
+  //      would navigate them OUT of the app entirely. We catch it via popstate.
+  //
+  //   2. User makes it to BTC-Sign, realizes they forgot a field, hits back to
+  //      return to our app. Modern browsers restore the React app from bfcache
+  //      (back-forward cache) with state frozen exactly as it was at navigation
+  //      time — including docLoading: true with no in-flight fetch. The result
+  //      is a permanently-spinning "Preparing your document..." page. We catch
+  //      this via pageshow with event.persisted === true.
+  //
+  // Either way, we restart the application cleanly so they get a fresh start.
+  // They lose form data, but they would have lost it anyway via a stale
+  // BTC-Sign submission, and now they get a clean retry instead of a frozen
+  // spinner with no recovery path.
+  useEffect(() => {
+    if (step !== 2) return;
+
+    let restarted = false;
+    const restart = () => {
+      if (restarted) return;
+      restarted = true;
+      restartApplication();
+    };
+
+    // Sentinel history entry. When the user clicks back, this gets popped and
+    // popstate fires (instead of immediately navigating away from our app).
+    try { window.history.pushState({ __btcStep2: true }, ""); } catch (e) {}
+
+    const handlePopState = () => restart();
+    const handlePageShow = (e) => { if (e.persisted) restart(); };
+
+    window.addEventListener("popstate", handlePopState);
+    window.addEventListener("pageshow", handlePageShow);
+    return () => {
+      window.removeEventListener("popstate", handlePopState);
+      window.removeEventListener("pageshow", handlePageShow);
+    };
+  }, [step]);
+
   const initDocuSeal = useCallback(async () => {
     setDocLoading(true); setDocError(null);
     try {
