@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { upload } from "@vercel/blob/client";
 import { STATES, ENTITY_OPTS, PRODUCT_OPTS, PROCEEDS_OPTS, YES_NO, emptyOwner, LOGO, NV1, NV2, NV3 } from "./constants";
 import { getParam, normalizeAgent, getVal, fmtPhone, rawPhone, fmtTaxId, rawTaxId, fmtZip, rawMoney, isBirthdayToday, extractDomain, scrollToError, getMonthNames } from "./utils";
 import { useIsMobile, sliderCss, mobileCss, ValidationModal, HoneypotField, SSNField, Field, MoneySliderField, NumSliderField, StateSelect, Select, Textarea, Row } from "./ui";
@@ -521,7 +522,24 @@ export default function App() {
     setBankErrors("");
   };
 
-  // Bank upload routes through /api/upload-bank (Vercel multipart proxy).
+  // Bank upload via Vercel Blob to bypass the 4.5MB function body limit.
+  //
+  // FLOW:
+  //   1. For each file, upload directly to Vercel Blob using @vercel/blob/client's
+  //      upload(). The browser hits /api/blob-upload-token to get a presigned
+  //      URL, then sends the file bytes straight to Blob storage. NO bytes pass
+  //      through our serverless function on this path, so the 4.5MB inbound
+  //      limit doesn't apply.
+  //   2. Collect the Blob URLs into a blobs[] array.
+  //   3. POST a JSON body to /api/upload-bank containing the metadata + blob URLs
+  //      (no file bytes). This JSON is small (a few KB), well under any limit.
+  //   4. /api/upload-bank downloads each blob server-side, encodes to base64,
+  //      and forwards to n8n as JSON. After n8n responds, blobs are deleted.
+  //
+  // FILE SIZE: up to 50MB per file (per blob-upload-token.js cap). Vercel Blob
+  // itself supports up to 5TB per file in client uploads — the 50MB cap is a
+  // sanity limit for bank statements, not a platform constraint.
+  //
   // Belt-and-suspenders: also blocks if verification hasn't completed or failed,
   // even though the UI hides the submit button in those cases.
   const handleBankSubmit = async () => {
@@ -531,32 +549,68 @@ export default function App() {
     }
     const missing = bankFiles.slice(0, requiredBankCount).filter(f => !f).length;
     if (missing > 0) { setBankErrors(`First ${requiredBankCount} months are required`); return; }
-    setBankErrors(""); setBankUploading(true); setUploadProgress("Uploading...");
+    setBankErrors(""); setBankUploading(true); setUploadProgress("Preparing upload...");
+
     try {
       const validFiles = bankFiles.filter(f => f);
-      const fd = new FormData();
-      fd.append("event", "bank_statements_uploaded");
-      fd.append("step", "bank_upload");
-      fd.append("email", _email || "");
-      fd.append("timestamp", new Date().toISOString());
+
+      // STEP 1: Upload each file directly to Vercel Blob. The upload() helper
+      // negotiates a presigned token with /api/blob-upload-token, then PUTs
+      // the file bytes to Vercel Blob storage. Files never pass through our
+      // serverless function, so the 4.5MB body limit doesn't apply here.
+      const blobs = [];
+      for (let i = 0; i < validFiles.length; i++) {
+        const file = validFiles[i];
+        setUploadProgress(`Uploading file ${i + 1} of ${validFiles.length}...`);
+        // Path includes timestamp + index + original filename to avoid collisions
+        // when multiple customers upload simultaneously.
+        const pathname = `bank-statements/${Date.now()}-${i}-${file.name}`;
+        const blob = await upload(pathname, file, {
+          access: "public",
+          handleUploadUrl: "/api/blob-upload-token",
+        });
+        blobs.push({
+          url: blob.url,
+          field_name: `file_${i}`,
+          filename: file.name,
+          mimetype: file.type || "application/octet-stream",
+          size_bytes: file.size,
+        });
+      }
+
+      // STEP 2: POST a small JSON body with the metadata + blob URLs to our
+      // /api/upload-bank endpoint. This payload contains ONLY URLs (a few KB
+      // total), not file bytes, so it easily fits under the 4.5MB inbound limit.
+      setUploadProgress("Processing...");
       const agentParam = getAgentSlug();
-      if (agentParam) { fd.append("agent_param", agentParam); fd.append("slug", agentParam); }
-      fd.append("link_url", getLinkUrl());
-      if (_agentData) fd.append("agent_info", JSON.stringify(_agentData));
-      // Include the verified submission_id so n8n can join bank statements
-      // back to the original signed application. Use resolveSubmissionId so we
-      // get the real ID even when BTC-Sign left the literal {{submission_id}}
-      // template token in the redirect URL.
       const sid = resolveSubmissionId();
-      if (sid) fd.append("submission_id", sid);
-      fd.append("total_files", String(validFiles.length));
-      validFiles.forEach((file, i) => { fd.append(`file_${i}`, file, file.name); });
-      const res = await fetch("/api/upload-bank", { method: "POST", body: fd });
+      const payload = {
+        event: "bank_statements_uploaded",
+        step: "bank_upload",
+        email: _email || "",
+        timestamp: new Date().toISOString(),
+        agent_param: agentParam || null,
+        slug: agentParam || null,
+        link_url: getLinkUrl(),
+        agent_info: _agentData ? JSON.stringify(_agentData) : null,
+        submission_id: sid || null,
+        total_files: String(validFiles.length),
+        file_count: validFiles.length,
+        blobs,
+      };
+
+      const res = await fetch("/api/upload-bank", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
       if (!res.ok) {
         let msg = "Upload failed: " + res.status;
         try { const j = await res.json(); if (j && j.error) msg = j.error; } catch(e) {}
         throw new Error(msg);
       }
+
       setUploadProgress(""); setBankUploading(false); setPage("thanks");
     } catch (e) {
       setUploadProgress(""); setBankUploading(false);
