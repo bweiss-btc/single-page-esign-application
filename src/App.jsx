@@ -178,6 +178,19 @@ function getPrevMonthNames(count) {
   return out;
 }
 
+// Sanitize a filename for use in a Vercel Blob pathname. Vercel Blob can be
+// fussy about pathnames containing parentheses, spaces, and other special
+// characters — "eSign-App-Walkthrough(1).pdf" returned 400 Bad Request from
+// the storage endpoint because the parentheses tripped pathname validation.
+// We strip everything that isn't a letter, digit, dot, dash, or underscore
+// and collapse runs of underscores. The ORIGINAL filename is preserved
+// separately in the blob metadata payload so downstream n8n sees the real
+// name on the Salesforce/Box attachment.
+function sanitizePathname(name) {
+  if (!name) return "file";
+  return name.replace(/[^a-zA-Z0-9._-]/g, "_").replace(/_+/g, "_");
+}
+
 export default function App() {
   const isMobile = useIsMobile();
   const isSigned = getParam("signed") === "true";
@@ -540,6 +553,12 @@ export default function App() {
   // itself supports up to 5TB per file in client uploads — the 50MB cap is a
   // sanity limit for bank statements, not a platform constraint.
   //
+  // PATHNAME SANITIZATION: file.name goes through sanitizePathname() before
+  // being used in the Blob pathname because Vercel Blob rejected pathnames
+  // with parentheses (e.g. "eSign-App-Walkthrough(1).pdf") with 400 Bad
+  // Request. The original filename is preserved in the metadata payload
+  // sent to n8n, so Salesforce/Box still see the real filename.
+  //
   // Belt-and-suspenders: also blocks if verification hasn't completed or failed,
   // even though the UI hides the submit button in those cases.
   const handleBankSubmit = async () => {
@@ -562,9 +581,11 @@ export default function App() {
       for (let i = 0; i < validFiles.length; i++) {
         const file = validFiles[i];
         setUploadProgress(`Uploading file ${i + 1} of ${validFiles.length}...`);
-        // Path includes timestamp + index + original filename to avoid collisions
-        // when multiple customers upload simultaneously.
-        const pathname = `bank-statements/${Date.now()}-${i}-${file.name}`;
+        // Path includes timestamp + index + SANITIZED filename to avoid collisions
+        // when multiple customers upload simultaneously AND to keep Vercel Blob
+        // happy (parentheses/spaces/special chars in pathnames trigger 400 errors).
+        // The real filename is still preserved in the blobs[] metadata below.
+        const pathname = `bank-statements/${Date.now()}-${i}-${sanitizePathname(file.name)}`;
         const blob = await upload(pathname, file, {
           access: "public",
           handleUploadUrl: "/api/blob-upload-token",
@@ -572,7 +593,7 @@ export default function App() {
         blobs.push({
           url: blob.url,
           field_name: `file_${i}`,
-          filename: file.name,
+          filename: file.name,  // original filename, NOT the sanitized one
           mimetype: file.type || "application/octet-stream",
           size_bytes: file.size,
         });
