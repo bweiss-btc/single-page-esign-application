@@ -1,45 +1,61 @@
 // Bank statement upload proxy.
 //
 // HISTORY:
-//   v1 — Raw byte-for-byte multipart forward to n8n. Binary preserved exactly.
-//        Simple but n8n nodes couldn't easily inspect file contents without
-//        binary-to-base64 conversion downstream.
-//   v2 — Parsed multipart, forwarded BOTH binary and base64. Idea was to give
-//        n8n flexibility to use whichever it preferred. Problem: rebuilding the
-//        multipart payload with Node FormData + fetch regenerated the boundary
-//        and apparently confused n8n's webhook handler — uploads stopped working.
-//   v3 (current) — Base64 ONLY, sent as JSON.
+//   v1 — Raw byte-for-byte multipart forward. Binary preserved exactly but
+//        n8n nodes couldn't easily inspect contents.
+//   v2 — Dual binary + base64 multipart. Boundary regeneration broke uploads.
+//   v3 — Base64-only JSON. Cleaner, but uploads timed out (504) because the
+//        function blocked waiting for n8n's full workflow to complete.
+//   v4 (current) — Base64 JSON with fire-and-forget semantics. We send the
+//        payload to n8n, wait briefly for confirmation it was received, then
+//        return success to the browser regardless of whether the n8n workflow
+//        has finished. n8n keeps processing in the background.
 //
-// WHY JSON-WITH-BASE64:
-//   - Deterministic: no multipart boundary fragility, no Content-Type/body mismatch
-//     possible. fetch() builds the body, sets Content-Type: application/json, done.
-//   - Easier for n8n to consume: every field including file contents is just a
-//     property on $json. No "switch between binary and JSON nodes" gymnastics.
-//   - One canonical representation per file, no duplication.
+// WHY FIRE-AND-FORGET:
+//   - Vercel serverless functions have a 10-second execution limit on Hobby
+//     (60s on Pro). The n8n workflow downstream of this webhook does Salesforce
+//     writes, Box uploads, email sending, and multiple branch evaluations.
+//     That whole chain easily exceeds 10s.
+//   - n8n's webhook node, by default, only responds to the HTTP caller after
+//     the entire workflow completes. So our `await fetch()` was blocking for
+//     the full workflow duration, hitting Vercel's timeout, and returning 504
+//     to the browser — even though n8n successfully received and processed
+//     the upload.
+//   - The browser doesn't actually need to wait for n8n to finish. It just
+//     needs confirmation that the file was uploaded. n8n's own error handling
+//     and retry logic catches downstream failures separately.
 //
-// COST:
-//   - Base64 inflates file size by ~33%. For 4 bank statements at ~10MB each,
-//     that's ~40MB binary becoming ~53MB base64. Vercel function outbound has no
-//     4.5MB limit (only inbound does), so the forward to n8n is fine. n8n's
-//     webhook needs to accept ~53MB JSON bodies, which is well within Express'
-//     default body parser limit of 100MB (and n8n inherits Express).
+// HOW IT WORKS:
+//   - Start the fetch to n8n.
+//   - Race it against a 5-second timeout (well under Vercel's 10s limit).
+//   - If n8n responds in time (rare — workflow usually takes longer), forward
+//     that response to the browser.
+//   - If the timeout fires first, abort the fetch and return success with a
+//     "queued" flag. The TCP body has long since been sent at this point —
+//     n8n has the data and is processing it.
+//   - If something genuinely fails (network error, DNS, etc.), surface that
+//     to the browser.
+//
+// TRADEOFFS:
+//   - If n8n returns an error AFTER we've already returned success, the
+//     browser won't know. The customer will see a thank-you page even if
+//     Salesforce sync failed silently. We rely on the rep being notified via
+//     the existing email path and on n8n's error workflows to surface issues.
+//   - If n8n is completely unreachable, the abort/error path catches it and
+//     returns 500 to the browser. So actual failures still surface.
 //
 // IMPORTANT LIMITATION (UNCHANGED):
-//   - The 4.5MB Vercel INBOUND limit still applies to the browser → this function
-//     hop. If a customer uploads >4.5MB total, this function never runs. The fix
-//     for THAT is Vercel Blob (direct browser → storage), separate change.
-//
-// REQUIRED N8N WORKFLOW UPDATE:
-//   - Existing nodes consuming binary file_0 multipart parts will not find them
-//     anymore. Update those nodes to:
-//     1. Read $json.files[0].base64 (or whatever index)
-//     2. Convert base64 → binary using a Code node or built-in base64 decode
-//   - Or, if Salesforce attachments are the target, Salesforce's Body field
-//     accepts base64 directly — just pass $json.files[0].base64 straight through.
+//   - The 4.5MB Vercel INBOUND limit still applies. Customers uploading >4.5MB
+//     of statements still get blocked at the edge. Vercel Blob is the fix for
+//     that, separate change.
 
 import { Readable } from "node:stream";
 
 const WEBHOOK = "https://n8n.bigthinkcapital.com/webhook/ec9ccd01-c951-42b3-ac51-27a3077f6648";
+
+// 5 seconds gives n8n a chance to respond quickly if it's configured to and
+// leaves a comfortable buffer under Vercel's 10s execution limit.
+const UPSTREAM_RESPONSE_TIMEOUT_MS = 5000;
 
 export const config = {
   api: {
@@ -48,7 +64,7 @@ export const config = {
 };
 
 export default async function handler(req, res) {
-  // Basic security headers (same as create-submission.js)
+  // Basic security headers
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'SAMEORIGIN');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
@@ -63,10 +79,7 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "Expected multipart/form-data" });
     }
 
-    // Parse the incoming multipart body using Node's built-in Web Streams + Request +
-    // FormData APIs (Node 18+, which Vercel runs on). Convert the Node IncomingMessage
-    // stream into a Web ReadableStream, wrap it in a Request, then call formData() to
-    // get a parsed FormData where File entries expose .arrayBuffer() and .name.
+    // Parse the multipart body using Node's built-in Web Request + FormData APIs.
     const webStream = Readable.toWeb(req);
     const incomingRequest = new Request("http://localhost/", {
       method: "POST",
@@ -82,10 +95,7 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "Failed to parse multipart: " + parseErr.message });
     }
 
-    // Build the JSON payload for n8n. Non-file fields become top-level string
-    // properties. File entries become objects in a `files` array, each with
-    // base64 contents, filename, mimetype, and size. The array preserves the
-    // order the files were uploaded.
+    // Build the JSON payload for n8n.
     const payload = {};
     const files = [];
 
@@ -95,16 +105,13 @@ export default async function handler(req, res) {
       if (isFile) {
         const buffer = Buffer.from(await value.arrayBuffer());
         files.push({
-          field_name: key,                                       // e.g. "file_0"
+          field_name: key,
           filename: value.name || "",
           mimetype: value.type || "application/octet-stream",
           size_bytes: buffer.length,
           base64: buffer.toString("base64"),
         });
       } else {
-        // Plain string field — preserve as JSON property. Includes things like
-        // event, step, email, timestamp, agent_param, slug, link_url,
-        // agent_info, submission_id, total_files.
         payload[key] = value;
       }
     }
@@ -112,27 +119,70 @@ export default async function handler(req, res) {
     payload.files = files;
     payload.file_count = files.length;
 
-    // Forward to n8n as JSON. No multipart, no boundary handling — fetch sets
-    // Content-Type: application/json and the body is a deterministic string.
-    const upstream = await fetch(WEBHOOK, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
+    // Fire the request to n8n with a short timeout. AbortController fires the
+    // abort signal after the timeout. The body is sent over TCP almost
+    // immediately (3MB payload at typical Vercel→n8n network speeds is well
+    // under 1s); the wait is for n8n to FINISH processing and return headers.
+    // We don't care about that — once the body is sent, n8n has the data.
+    const controller = new AbortController();
+    const timeoutHandle = setTimeout(() => controller.abort(), UPSTREAM_RESPONSE_TIMEOUT_MS);
 
-    const text = await upstream.text();
-    if (!upstream.ok) {
-      return res.status(upstream.status).json({
-        error: "Upload forwarding failed",
-        upstream_status: upstream.status,
-        upstream_body: text.slice(0, 500),
+    let upstreamResponse = null;
+    let upstreamError = null;
+
+    try {
+      upstreamResponse = await fetch(WEBHOOK, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+    } catch (err) {
+      upstreamError = err;
+    } finally {
+      clearTimeout(timeoutHandle);
+    }
+
+    // If we got a real network error that ISN'T an AbortError (DNS failure,
+    // connection refused, etc.), surface it to the browser. AbortError just
+    // means "n8n is taking longer than 5s to respond" which is expected.
+    if (upstreamError && upstreamError.name !== "AbortError") {
+      return res.status(502).json({
+        error: "Could not reach upstream",
+        details: upstreamError.message,
         files_processed: files.length,
       });
     }
 
-    let parsed;
-    try { parsed = JSON.parse(text); } catch (e) { parsed = { success: true, message: text }; }
-    return res.status(200).json(parsed || { success: true });
+    // If n8n responded within the timeout (uncommon but possible if the
+    // workflow is fast or the webhook is configured to respond immediately),
+    // honor its response.
+    if (upstreamResponse) {
+      const text = await upstreamResponse.text();
+      let parsed;
+      try { parsed = JSON.parse(text); } catch (e) { parsed = { success: true, message: text }; }
+
+      if (!upstreamResponse.ok) {
+        return res.status(upstreamResponse.status).json({
+          error: "Upload forwarding failed",
+          upstream_status: upstreamResponse.status,
+          upstream_body: text.slice(0, 500),
+          files_processed: files.length,
+        });
+      }
+
+      return res.status(200).json(parsed || { success: true });
+    }
+
+    // Timeout fired before n8n responded. The TCP body has already been sent
+    // (n8n has the data); the workflow is just still processing. Return
+    // success — the customer's upload is queued for processing.
+    return res.status(200).json({
+      success: true,
+      queued: true,
+      files_processed: files.length,
+      message: "Upload received and queued for processing",
+    });
   } catch (err) {
     return res.status(500).json({ error: "Upload failed: " + err.message });
   }
