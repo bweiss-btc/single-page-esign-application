@@ -27,6 +27,22 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
+  // Log incoming request body for debugging Vercel Blob 400 errors. The body
+  // shape differs depending on which phase of the upload flow we're in:
+  //   - blob.generate-client-token: initial token request from browser
+  //   - blob.upload-completed: post-upload callback from Vercel Blob
+  // If Vercel Blob rejects an upload, we want to see WHY here, since the
+  // browser only gets a generic 400 without much detail.
+  try {
+    console.log("[blob-upload-token] incoming request:", JSON.stringify({
+      type: req.body && req.body.type,
+      pathname: req.body && req.body.payload && req.body.payload.pathname,
+      callbackUrl: req.body && req.body.payload && req.body.payload.callbackUrl,
+    }));
+  } catch (e) {
+    console.log("[blob-upload-token] could not log request body:", e.message);
+  }
+
   try {
     const body = req.body;
     const jsonResponse = await handleUpload({
@@ -38,17 +54,21 @@ export default async function handler(req, res) {
         // statements to JPG/PNG before uploading). Keep the allowlist tight
         // so the token can't be misused for arbitrary file uploads.
         //
+        // Note: "image/jpg" removed — it's not a valid MIME type per IANA
+        // (the correct one is "image/jpeg"). Browsers won't send "image/jpg"
+        // even for .jpg files; they send "image/jpeg". Keeping invalid types
+        // in the allowlist may trip strict validation in Vercel Blob.
+        //
         // addRandomSuffix: true tells Vercel Blob to append a random suffix
         // to the pathname before storing. This avoids collisions when
         // multiple customers upload simultaneously AND it sanitizes
-        // problematic filenames (special characters like parentheses in
-        // "eSign-App-Walkthrough(1).pdf" are handled transparently).
+        // problematic filenames transparently.
+        console.log("[blob-upload-token] generating token for pathname:", pathname);
         return {
           allowedContentTypes: [
             "application/pdf",
             "image/png",
             "image/jpeg",
-            "image/jpg",
           ],
           addRandomSuffix: true,
           tokenPayload: JSON.stringify({}),
@@ -60,12 +80,12 @@ export default async function handler(req, res) {
         // We don't need to do anything here — the browser will send the
         // URL to /api/upload-bank, which is where the real downstream
         // work (n8n forward + cleanup) happens.
-        // Keep this stub here in case we want to add logging or other
-        // post-upload hooks later.
+        console.log("[blob-upload-token] upload completed:", blob && blob.url);
       },
     });
     return res.status(200).json(jsonResponse);
   } catch (err) {
+    console.error("[blob-upload-token] handleUpload error:", err && err.message, err && err.stack);
     return res.status(400).json({ error: err.message || "Token generation failed" });
   }
 }
