@@ -1,10 +1,23 @@
 import { useState, useEffect, useCallback } from "react";
-import { upload } from "@vercel/blob/client";
 import { STATES, ENTITY_OPTS, PRODUCT_OPTS, PROCEEDS_OPTS, YES_NO, emptyOwner, LOGO, NV1, NV2, NV3 } from "./constants";
 import { getParam, normalizeAgent, getVal, fmtPhone, rawPhone, fmtTaxId, rawTaxId, fmtZip, rawMoney, isBirthdayToday, extractDomain, scrollToError, getMonthNames } from "./utils";
 import { useIsMobile, sliderCss, mobileCss, ValidationModal, HoneypotField, SSNField, Field, MoneySliderField, NumSliderField, StateSelect, Select, Textarea, Row } from "./ui";
 import { TopBar, AgentCard, AgentFooter, AgentPhoto, Footer, Toast, StepBar, SH } from "./brand";
 import { AddressField } from "./places";
+
+// n8n webhook for direct browser uploads. This is the same MAIN_WEBHOOK that
+// receives every other application event (email_entered, business_info_completed,
+// owner_info_completed, application_submitted, application_signed). Step events
+// go through /api/create-submission?proxy=webhook because their payloads are
+// tiny and the proxy adds standard logging/error handling. But bank uploads
+// are 30-50 MB once base64-inflated — far above Vercel's hard 4.5 MB serverless
+// function body limit — so we bypass Vercel entirely and POST directly to n8n.
+// n8n is self-hosted at n8n.bigthinkcapital.com with no equivalent body cap.
+//
+// CORS: the n8n webhook must respond to OPTIONS preflights with
+// Access-Control-Allow-Origin: https://application.bigthinkcapital.com
+// (configured at the n8n / nginx layer, not in this codebase).
+const BANK_UPLOAD_WEBHOOK = "https://n8n.bigthinkcapital.com/webhook/ec9ccd01-c951-42b3-ac51-27a3077f6648";
 
 let _agentData = null;
 let _email = (() => { try { return sessionStorage.getItem("btc_email") || ""; } catch (e) { return ""; } })();
@@ -178,17 +191,26 @@ function getPrevMonthNames(count) {
   return out;
 }
 
-// Sanitize a filename for use in a Vercel Blob pathname. Vercel Blob can be
-// fussy about pathnames containing parentheses, spaces, and other special
-// characters — "eSign-App-Walkthrough(1).pdf" returned 400 Bad Request from
-// the storage endpoint because the parentheses tripped pathname validation.
-// We strip everything that isn't a letter, digit, dot, dash, or underscore
-// and collapse runs of underscores. The ORIGINAL filename is preserved
-// separately in the blob metadata payload so downstream n8n sees the real
-// name on the Salesforce/Box attachment.
-function sanitizePathname(name) {
-  if (!name) return "file";
-  return name.replace(/[^a-zA-Z0-9._-]/g, "_").replace(/_+/g, "_");
+// Reads a File/Blob as a base64 string (without the data: URL prefix).
+// Used to package bank statements into the JSON payload posted to n8n.
+// FileReader.readAsDataURL returns "data:<mime>;base64,XXX" — we strip the
+// prefix and return just the XXX part since n8n nodes consuming this expect
+// a clean base64 string.
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const result = reader.result || "";
+        const comma = result.indexOf(",");
+        resolve(comma >= 0 ? result.slice(comma + 1) : result);
+      } catch (e) {
+        reject(e);
+      }
+    };
+    reader.onerror = () => reject(new Error("Failed to read " + (file && file.name ? file.name : "file")));
+    reader.readAsDataURL(file);
+  });
 }
 
 export default function App() {
@@ -535,29 +557,21 @@ export default function App() {
     setBankErrors("");
   };
 
-  // Bank upload via Vercel Blob to bypass the 4.5MB function body limit.
+  // Bank upload — direct browser → n8n with base64-encoded files in JSON.
   //
-  // FLOW:
-  //   1. For each file, upload directly to Vercel Blob using @vercel/blob/client's
-  //      upload(). The browser hits /api/blob-upload-token to get a presigned
-  //      URL, then sends the file bytes straight to Blob storage. NO bytes pass
-  //      through our serverless function on this path, so the 4.5MB inbound
-  //      limit doesn't apply.
-  //   2. Collect the Blob URLs into a blobs[] array.
-  //   3. POST a JSON body to /api/upload-bank containing the metadata + blob URLs
-  //      (no file bytes). This JSON is small (a few KB), well under any limit.
-  //   4. /api/upload-bank downloads each blob server-side, encodes to base64,
-  //      and forwards to n8n as JSON. After n8n responds, blobs are deleted.
+  // We bypass Vercel entirely on this path because Vercel's hard 4.5 MB body
+  // limit on serverless functions can't accommodate 4 bank statements (typical
+  // bank statement PDFs are 5-15 MB each, and base64 inflation adds ~33%, so
+  // the total payload easily reaches 30-50 MB). n8n is self-hosted and has no
+  // equivalent cap, so direct browser → n8n is the simplest viable architecture.
   //
-  // FILE SIZE: up to 50MB per file (per blob-upload-token.js cap). Vercel Blob
-  // itself supports up to 5TB per file in client uploads — the 50MB cap is a
-  // sanity limit for bank statements, not a platform constraint.
+  // The JSON shape (files[] with base64) is exactly what n8n was already
+  // consuming from the old /api/upload-bank proxy, so no n8n workflow changes
+  // are needed — we've just removed the unnecessary middle hop.
   //
-  // PATHNAME SANITIZATION: file.name goes through sanitizePathname() before
-  // being used in the Blob pathname because Vercel Blob rejected pathnames
-  // with parentheses (e.g. "eSign-App-Walkthrough(1).pdf") with 400 Bad
-  // Request. The original filename is preserved in the metadata payload
-  // sent to n8n, so Salesforce/Box still see the real filename.
+  // CORS: n8n must respond to the browser's preflight OPTIONS request with
+  // Access-Control-Allow-Origin allowing application.bigthinkcapital.com. This
+  // is configured at the n8n/nginx layer, not here.
   //
   // Belt-and-suspenders: also blocks if verification hasn't completed or failed,
   // even though the UI hides the submit button in those cases.
@@ -568,41 +582,33 @@ export default function App() {
     }
     const missing = bankFiles.slice(0, requiredBankCount).filter(f => !f).length;
     if (missing > 0) { setBankErrors(`First ${requiredBankCount} months are required`); return; }
-    setBankErrors(""); setBankUploading(true); setUploadProgress("Preparing upload...");
+    setBankErrors(""); setBankUploading(true); setUploadProgress("Preparing files...");
 
     try {
       const validFiles = bankFiles.filter(f => f);
 
-      // STEP 1: Upload each file directly to Vercel Blob. The upload() helper
-      // negotiates a presigned token with /api/blob-upload-token, then PUTs
-      // the file bytes to Vercel Blob storage. Files never pass through our
-      // serverless function, so the 4.5MB body limit doesn't apply here.
-      const blobs = [];
+      // STEP 1: Read each file as base64. FileReader is async per-file; we read
+      // sequentially so the progress message reflects the current file. For 4
+      // files at ~5-10 MB each, total encode time is typically 1-3 seconds.
+      const files = [];
       for (let i = 0; i < validFiles.length; i++) {
         const file = validFiles[i];
-        setUploadProgress(`Uploading file ${i + 1} of ${validFiles.length}...`);
-        // Path includes timestamp + index + SANITIZED filename to avoid collisions
-        // when multiple customers upload simultaneously AND to keep Vercel Blob
-        // happy (parentheses/spaces/special chars in pathnames trigger 400 errors).
-        // The real filename is still preserved in the blobs[] metadata below.
-        const pathname = `bank-statements/${Date.now()}-${i}-${sanitizePathname(file.name)}`;
-        const blob = await upload(pathname, file, {
-          access: "public",
-          handleUploadUrl: "/api/blob-upload-token",
-        });
-        blobs.push({
-          url: blob.url,
+        setUploadProgress(`Reading file ${i + 1} of ${validFiles.length}...`);
+        const base64 = await fileToBase64(file);
+        files.push({
           field_name: `file_${i}`,
-          filename: file.name,  // original filename, NOT the sanitized one
+          filename: file.name,
           mimetype: file.type || "application/octet-stream",
           size_bytes: file.size,
+          base64,
         });
       }
 
-      // STEP 2: POST a small JSON body with the metadata + blob URLs to our
-      // /api/upload-bank endpoint. This payload contains ONLY URLs (a few KB
-      // total), not file bytes, so it easily fits under the 4.5MB inbound limit.
-      setUploadProgress("Processing...");
+      // STEP 2: Build payload and POST directly to n8n. Payload shape matches
+      // what the n8n workflow was already consuming via the old /api/upload-bank
+      // proxy — same event name, same files[] structure — so the workflow
+      // doesn't need any changes.
+      setUploadProgress("Uploading...");
       const agentParam = getAgentSlug();
       const sid = resolveSubmissionId();
       const payload = {
@@ -617,10 +623,10 @@ export default function App() {
         submission_id: sid || null,
         total_files: String(validFiles.length),
         file_count: validFiles.length,
-        blobs,
+        files,
       };
 
-      const res = await fetch("/api/upload-bank", {
+      const res = await fetch(BANK_UPLOAD_WEBHOOK, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
