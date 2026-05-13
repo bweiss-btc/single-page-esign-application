@@ -1,4 +1,9 @@
 {
+  "functions": {
+    "api/upload-bank.js": {
+      "maxDuration": 60
+    }
+  },
   "headers": [
     {
       "source": "/(.*)",
