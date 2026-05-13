@@ -1,106 +1,151 @@
 // Bank statement upload proxy.
 //
 // HISTORY:
-//   v1 — Raw byte-for-byte multipart forward. Binary preserved exactly but
-//        n8n nodes couldn't easily inspect contents.
-//   v2 — Dual binary + base64 multipart. Boundary regeneration broke uploads.
-//   v3 — Base64-only JSON. Cleaner, but uploads timed out (504) because the
-//        function blocked waiting for n8n's full workflow to complete on
-//        Vercel's 10s Hobby tier limit.
-//   v4 — Fire-and-forget with 5s AbortController. Workaround for the 10s
-//        Hobby limit. Returned success blindly after timeout.
-//   v5 (current) — Base64 JSON, real wait for n8n. We're on Vercel Pro now,
-//        so we can extend the function timeout to 60 seconds via config.
-//        That's plenty of time for n8n's downstream Salesforce / Box / email
-//        chain to actually finish, which means the browser gets real success
-//        or failure feedback instead of a "queued, hope for the best" guess.
+//   v1 — Raw multipart forward.
+//   v2 — Dual binary + base64. Broke uploads.
+//   v3 — Base64-only JSON, hit 10s function timeout (504).
+//   v4 — Fire-and-forget. Worked but lost real success/failure feedback.
+//   v5 — Direct multipart→JSON conversion with Pro tier 60s timeout. Worked
+//        for files <4.5MB total but hit Vercel's inbound body cap above that.
+//   v6 (CURRENT) — Two-path upload:
+//        (A) JSON-with-blob-URLs (preferred): browser uploaded files directly
+//            to Vercel Blob, sends us only the URLs. We fetch the bytes from
+//            Blob storage (server-to-server, no inbound size cap), encode as
+//            base64, forward as JSON to n8n.
+//        (B) Multipart fallback: if a client somehow still sends multipart,
+//            handle it the v5 way for backwards compatibility during deploys.
+//        Path A removes the 4.5MB inbound limit entirely. Files can be 100MB+.
 //
-// WHY THIS IS BETTER:
-//   - If Salesforce sync or Box upload fails inside n8n, the customer is now
-//     told about it instead of seeing a thank-you page over silent breakage.
-//   - The funding expert doesn't have to babysit n8n executions to catch
-//     downstream failures — they bubble up as upload errors on the customer side.
-//   - Simpler code: no AbortController, no timeout handling, no "queued" path.
+// REQUIRED ENV:
+//   - BLOB_READ_WRITE_TOKEN — auto-injected when Vercel Blob store is
+//     connected. Used for cleanup (deleting files after successful forward).
 //
-// IMPORTANT LIMITATION (UNCHANGED):
-//   - The 4.5MB Vercel INBOUND limit still applies. Customers uploading >4.5MB
-//     of statements still get blocked at the edge before this function runs.
-//     Vercel Blob is the fix for that, separate change.
+// CLEANUP:
+//   After a successful forward to n8n, we delete the blobs to keep the store
+//   tidy. If forwarding fails, blobs are left for manual cleanup or retry.
 
 import { Readable } from "node:stream";
+import { del } from "@vercel/blob";
 
 const WEBHOOK = "https://n8n.bigthinkcapital.com/webhook/ec9ccd01-c951-42b3-ac51-27a3077f6648";
 
 export const config = {
   api: {
-    bodyParser: false,
+    // Default body parser handles JSON. For the multipart fallback we override
+    // by checking content-type and reading raw stream below.
+    bodyParser: { sizeLimit: "4mb" },
   },
-  // Vercel Pro allows up to 300s. 60s is plenty for n8n's normal workflow
-  // execution and leaves headroom if downstream services are slow.
   maxDuration: 60,
 };
 
 export default async function handler(req, res) {
-  // Basic security headers
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
-  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "SAMEORIGIN");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
 
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
+  const contentType = req.headers["content-type"] || "";
+
   try {
-    const contentType = req.headers['content-type'];
-    if (!contentType || !contentType.includes('multipart/form-data')) {
-      return res.status(400).json({ error: "Expected multipart/form-data" });
-    }
+    let payload;
+    let blobUrlsToDelete = [];
 
-    // Parse the multipart body using Node's built-in Web Request + FormData APIs.
-    const webStream = Readable.toWeb(req);
-    const incomingRequest = new Request("http://localhost/", {
-      method: "POST",
-      headers: new Headers(req.headers),
-      body: webStream,
-      duplex: "half",
-    });
+    if (contentType.includes("application/json")) {
+      // PATH A: blob URLs in JSON. The browser already uploaded files to
+      // Vercel Blob — we just need to fetch, encode, and forward.
+      const body = req.body;
+      if (!body || !Array.isArray(body.blob_files)) {
+        return res.status(400).json({ error: "Missing blob_files array" });
+      }
 
-    let incoming;
-    try {
-      incoming = await incomingRequest.formData();
-    } catch (parseErr) {
-      return res.status(400).json({ error: "Failed to parse multipart: " + parseErr.message });
-    }
-
-    // Build the JSON payload for n8n. Non-file fields become top-level string
-    // properties. File entries become objects in a `files` array, each with
-    // base64 contents, filename, mimetype, and size.
-    const payload = {};
-    const files = [];
-
-    for (const [key, value] of incoming.entries()) {
-      const isFile = value && typeof value === "object" && typeof value.arrayBuffer === "function";
-
-      if (isFile) {
-        const buffer = Buffer.from(await value.arrayBuffer());
+      const files = [];
+      for (const blob of body.blob_files) {
+        if (!blob || !blob.url) {
+          return res.status(400).json({ error: "Each blob_files entry needs a url" });
+        }
+        const response = await fetch(blob.url);
+        if (!response.ok) {
+          return res.status(502).json({
+            error: "Failed to fetch blob from storage",
+            url: blob.url,
+            status: response.status,
+          });
+        }
+        const buffer = Buffer.from(await response.arrayBuffer());
         files.push({
-          field_name: key,
-          filename: value.name || "",
-          mimetype: value.type || "application/octet-stream",
+          field_name: blob.field_name || blob.filename,
+          filename: blob.filename || "",
+          mimetype: blob.mimetype || response.headers.get("content-type") || "application/octet-stream",
           size_bytes: buffer.length,
           base64: buffer.toString("base64"),
         });
-      } else {
-        payload[key] = value;
+        blobUrlsToDelete.push(blob.url);
       }
+
+      // Pass through metadata fields as-is.
+      payload = {
+        event: body.event,
+        step: body.step,
+        email: body.email,
+        timestamp: body.timestamp,
+        agent_param: body.agent_param,
+        slug: body.slug,
+        link_url: body.link_url,
+        agent_info: body.agent_info,
+        submission_id: body.submission_id,
+        total_files: body.total_files || String(files.length),
+        file_count: files.length,
+        files,
+      };
+    } else if (contentType.includes("multipart/form-data")) {
+      // PATH B: legacy multipart fallback. Kept so an old client cached
+      // during the rollout doesn't immediately break.
+      const webStream = Readable.toWeb(req);
+      const incomingRequest = new Request("http://localhost/", {
+        method: "POST",
+        headers: new Headers(req.headers),
+        body: webStream,
+        duplex: "half",
+      });
+
+      let incoming;
+      try {
+        incoming = await incomingRequest.formData();
+      } catch (parseErr) {
+        return res.status(400).json({ error: "Failed to parse multipart: " + parseErr.message });
+      }
+
+      payload = {};
+      const files = [];
+      for (const [key, value] of incoming.entries()) {
+        const isFile = value && typeof value === "object" && typeof value.arrayBuffer === "function";
+        if (isFile) {
+          const buffer = Buffer.from(await value.arrayBuffer());
+          files.push({
+            field_name: key,
+            filename: value.name || "",
+            mimetype: value.type || "application/octet-stream",
+            size_bytes: buffer.length,
+            base64: buffer.toString("base64"),
+          });
+        } else {
+          payload[key] = value;
+        }
+      }
+      payload.files = files;
+      payload.file_count = files.length;
+    } else {
+      return res.status(400).json({
+        error: "Expected application/json with blob_files OR multipart/form-data",
+        received: contentType,
+      });
     }
 
-    payload.files = files;
-    payload.file_count = files.length;
-
-    // Forward to n8n as JSON and wait for the actual response. With
-    // maxDuration: 60 in config above, we have a full minute for n8n's
-    // workflow to complete (Salesforce updates, Box uploads, email sending).
+    // Forward to n8n. With maxDuration: 60 we have a full minute for the
+    // workflow to complete (Salesforce + Box + email).
     const upstream = await fetch(WEBHOOK, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -113,8 +158,18 @@ export default async function handler(req, res) {
         error: "Upload forwarding failed",
         upstream_status: upstream.status,
         upstream_body: text.slice(0, 500),
-        files_processed: files.length,
+        files_processed: payload.file_count,
       });
+    }
+
+    // Forward succeeded. Clean up any Blob files (best-effort, don't fail the
+    // request if delete fails). Done in parallel for speed.
+    if (blobUrlsToDelete.length > 0) {
+      await Promise.allSettled(
+        blobUrlsToDelete.map(url =>
+          del(url).catch(e => console.log("[blob] delete failed:", url, e.message))
+        )
+      );
     }
 
     let parsed;
