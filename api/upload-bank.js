@@ -1,34 +1,41 @@
-// Multipart proxy for bank statement uploads.
+// Bank statement upload proxy.
 //
-// The browser can't POST multipart/form-data directly to the n8n webhook because of
-// the Access-Control-Allow-Origin:https://offers.bigthinkcapital.com header that n8n
-// (or the reverse proxy in front of it) returns. That preflight failure is what made
-// bank uploads look like "binary not sending correctly" — the browser would send the
-// request but the response would be blocked, and sometimes the binary payload doesn't
-// even reach the server because preflight fails.
+// HISTORY:
+//   v1 — Raw byte-for-byte multipart forward to n8n. Binary preserved exactly.
+//        Simple but n8n nodes couldn't easily inspect file contents without
+//        binary-to-base64 conversion downstream.
+//   v2 — Parsed multipart, forwarded BOTH binary and base64. Idea was to give
+//        n8n flexibility to use whichever it preferred. Problem: rebuilding the
+//        multipart payload with Node FormData + fetch regenerated the boundary
+//        and apparently confused n8n's webhook handler — uploads stopped working.
+//   v3 (current) — Base64 ONLY, sent as JSON.
 //
-// HISTORICAL APPROACH (deprecated):
-// We used to forward raw bytes byte-for-byte, preserving the original multipart boundary,
-// because that's the simplest way to keep binary integrity. But that meant the n8n
-// workflow only saw files in binary form, with no easy way to inspect file contents in
-// downstream nodes that expect base64 strings (Salesforce attachments, some HTTP APIs,
-// AI extraction nodes, etc.).
+// WHY JSON-WITH-BASE64:
+//   - Deterministic: no multipart boundary fragility, no Content-Type/body mismatch
+//     possible. fetch() builds the body, sets Content-Type: application/json, done.
+//   - Easier for n8n to consume: every field including file contents is just a
+//     property on $json. No "switch between binary and JSON nodes" gymnastics.
+//   - One canonical representation per file, no duplication.
 //
-// CURRENT APPROACH:
-// We parse the incoming multipart form, then forward to n8n with each file represented
-// TWICE in the new payload:
-//   - file_N           — the original binary file (unchanged, multipart part with bytes)
-//   - file_N_base64    — the same file's contents encoded as a base64 string field
-//   - file_N_filename  — original filename (so n8n knows what to call the base64 version)
-//   - file_N_mimetype  — original content-type
-// Non-file fields (event, step, email, etc.) pass through untouched. n8n nodes can
-// consume whichever form they prefer; existing binary-consuming nodes keep working.
+// COST:
+//   - Base64 inflates file size by ~33%. For 4 bank statements at ~10MB each,
+//     that's ~40MB binary becoming ~53MB base64. Vercel function outbound has no
+//     4.5MB limit (only inbound does), so the forward to n8n is fine. n8n's
+//     webhook needs to accept ~53MB JSON bodies, which is well within Express'
+//     default body parser limit of 100MB (and n8n inherits Express).
 //
-// Vercel serverless limit: ~4.5MB total request body. Three bank statement PDFs are
-// usually well under this. If users hit the limit, we'll need to move to Vercel Blob
-// (direct-to-storage upload, then pass URLs to n8n). Base64 encoding happens AFTER
-// the request enters this function, so it doesn't affect the ingress limit (it only
-// affects egress size from Vercel → n8n, which has no comparable cap).
+// IMPORTANT LIMITATION (UNCHANGED):
+//   - The 4.5MB Vercel INBOUND limit still applies to the browser → this function
+//     hop. If a customer uploads >4.5MB total, this function never runs. The fix
+//     for THAT is Vercel Blob (direct browser → storage), separate change.
+//
+// REQUIRED N8N WORKFLOW UPDATE:
+//   - Existing nodes consuming binary file_0 multipart parts will not find them
+//     anymore. Update those nodes to:
+//     1. Read $json.files[0].base64 (or whatever index)
+//     2. Convert base64 → binary using a Code node or built-in base64 decode
+//   - Or, if Salesforce attachments are the target, Salesforce's Body field
+//     accepts base64 directly — just pass $json.files[0].base64 straight through.
 
 import { Readable } from "node:stream";
 
@@ -57,9 +64,9 @@ export default async function handler(req, res) {
     }
 
     // Parse the incoming multipart body using Node's built-in Web Streams + Request +
-    // FormData APIs (Node 18+, which Vercel runs on). We convert the Node IncomingMessage
-    // stream to a Web ReadableStream, wrap it in a Request, then call formData() to get
-    // a parsed FormData object where File entries have .arrayBuffer() and .name.
+    // FormData APIs (Node 18+, which Vercel runs on). Convert the Node IncomingMessage
+    // stream into a Web ReadableStream, wrap it in a Request, then call formData() to
+    // get a parsed FormData where File entries expose .arrayBuffer() and .name.
     const webStream = Readable.toWeb(req);
     const incomingRequest = new Request("http://localhost/", {
       method: "POST",
@@ -75,51 +82,42 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "Failed to parse multipart: " + parseErr.message });
     }
 
-    // Rebuild a new FormData for the outbound request. For File entries, append the
-    // original File AND a parallel base64 string field. For everything else, pass
-    // through untouched.
-    const outgoing = new FormData();
-    let fileCount = 0;
+    // Build the JSON payload for n8n. Non-file fields become top-level string
+    // properties. File entries become objects in a `files` array, each with
+    // base64 contents, filename, mimetype, and size. The array preserves the
+    // order the files were uploaded.
+    const payload = {};
+    const files = [];
 
     for (const [key, value] of incoming.entries()) {
-      // Detect file entries. In Node's Web FormData implementation, files come back
-      // as File or Blob objects with a .name property. Check for arrayBuffer presence
-      // as a more reliable signal across runtimes than instanceof File.
       const isFile = value && typeof value === "object" && typeof value.arrayBuffer === "function";
 
       if (isFile) {
-        // Re-append the original file under its original key so the binary path stays
-        // exactly as it was before this change. n8n nodes that consume binary continue
-        // to work without any workflow modification.
-        outgoing.append(key, value, value.name || `${key}.bin`);
-
-        // Compute base64 of the file's bytes and append as a string field. The key is
-        // `${key}_base64` so an existing field "file_0" gets a sibling "file_0_base64".
         const buffer = Buffer.from(await value.arrayBuffer());
-        outgoing.append(`${key}_base64`, buffer.toString("base64"));
-
-        // Helpful metadata alongside the base64 string so n8n nodes consuming the
-        // base64 path know what to call the file and what its mime type is. (The
-        // binary multipart part already includes these via Content-Disposition and
-        // Content-Type headers, but a node consuming the base64 string field won't
-        // see those.)
-        outgoing.append(`${key}_filename`, value.name || "");
-        outgoing.append(`${key}_mimetype`, value.type || "application/octet-stream");
-
-        fileCount++;
+        files.push({
+          field_name: key,                                       // e.g. "file_0"
+          filename: value.name || "",
+          mimetype: value.type || "application/octet-stream",
+          size_bytes: buffer.length,
+          base64: buffer.toString("base64"),
+        });
       } else {
-        // Plain string field (event, email, agent_param, etc.) — pass through as-is.
-        outgoing.append(key, value);
+        // Plain string field — preserve as JSON property. Includes things like
+        // event, step, email, timestamp, agent_param, slug, link_url,
+        // agent_info, submission_id, total_files.
+        payload[key] = value;
       }
     }
 
-    // Forward to n8n. Letting fetch handle the body means it generates a fresh
-    // multipart boundary and sets Content-Type automatically. We don't set the
-    // Content-Type header ourselves — if we did, the boundary in the header would
-    // mismatch the boundary in the body that FormData generates internally.
+    payload.files = files;
+    payload.file_count = files.length;
+
+    // Forward to n8n as JSON. No multipart, no boundary handling — fetch sets
+    // Content-Type: application/json and the body is a deterministic string.
     const upstream = await fetch(WEBHOOK, {
       method: "POST",
-      body: outgoing,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
     });
 
     const text = await upstream.text();
@@ -128,12 +126,10 @@ export default async function handler(req, res) {
         error: "Upload forwarding failed",
         upstream_status: upstream.status,
         upstream_body: text.slice(0, 500),
-        files_processed: fileCount,
+        files_processed: files.length,
       });
     }
 
-    // n8n usually returns JSON but sometimes plain text — pass through if JSON,
-    // wrap otherwise.
     let parsed;
     try { parsed = JSON.parse(text); } catch (e) { parsed = { success: true, message: text }; }
     return res.status(200).json(parsed || { success: true });
