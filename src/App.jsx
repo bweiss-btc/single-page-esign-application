@@ -19,6 +19,15 @@ import { AddressField } from "./places";
 // (configured at the n8n / nginx layer, not in this codebase).
 const BANK_UPLOAD_WEBHOOK = "https://n8n.bigthinkcapital.com/webhook/ec9ccd01-c951-42b3-ac51-27a3077f6648";
 
+// Minimum combined ownership percentage that must be captured when there are
+// two owners. We don't require 100% because most businesses have minority
+// shareholders (employees, early investors, family members) whose details
+// aren't needed for funding — we just need to confirm that the named owners
+// represent a controlling block. 66% is a supermajority threshold that
+// reliably covers the decision-makers without forcing applicants to chase
+// down every cap table entry.
+const OWNERSHIP_THRESHOLD = 66;
+
 let _agentData = null;
 let _email = (() => { try { return sessionStorage.getItem("btc_email") || ""; } catch (e) { return ""; } })();
 let _honeypot = "";
@@ -325,9 +334,13 @@ export default function App() {
       if (!o.zip || o.zip.length !== 5) m.push({ id: `own${i}-zip`, label: `${p}: ZIP`, hint: "Must be 5 digits" });
       if (!o.email || !o.email.includes("@")) m.push({ id: `own${i}-email`, label: `${p}: Email`, hint: "Must contain @" });
     });
+    // Combined-ownership threshold check. We don't require 100% (most companies
+    // have small minority shareholders whose details aren't material for funding);
+    // we just need the listed owners to represent a controlling block. See
+    // OWNERSHIP_THRESHOLD constant at top of file for rationale.
     if (owners.length === 2) {
       const total = (Number(owners[0].ownership) || 0) + (Number(owners[1].ownership) || 0);
-      if (total !== 100) m.push({ id: "own1-own", label: "Ownership must total 100%", hint: `Primary + Secondary currently total ${total}%. Adjust so they add to exactly 100%.` });
+      if (total < OWNERSHIP_THRESHOLD) m.push({ id: "own1-own", label: `Ownership must total at least ${OWNERSHIP_THRESHOLD}%`, hint: `Primary + Secondary currently total ${total}%. Adjust percentages so they sum to at least ${OWNERSHIP_THRESHOLD}%.` });
     }
     if (m.length > 0) { setHasError(true); setModal(m); scrollToError(); return false; }
     setHasError(false); return true;
@@ -915,10 +928,10 @@ export default function App() {
                 {owners.length < 2 && <button onClick={() => setOwners(p => [...p, emptyOwner()])} style={{ width: "100%", marginTop: 20, padding: "12px", border: "2px dashed #c8d5db", borderRadius: 10, background: "#f8fbfc", color: NV2, fontSize: 13, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}><span style={{ fontSize: 16 }}>+</span> Add a Second Owner</button>}
               {owners.length === 2 && (() => {
                 const total = (Number(owners[0].ownership) || 0) + (Number(owners[1].ownership) || 0);
-                const ok = total === 100;
+                const ok = total >= OWNERSHIP_THRESHOLD;
                 return (
                   <div style={{ width: "100%", marginTop: 20, padding: "12px 16px", borderRadius: 10, background: ok ? "#f0fdf4" : "#fef3c7", border: "1px solid " + (ok ? "#86efac" : "#fcd34d"), fontSize: 13, fontWeight: 700, color: ok ? "#166534" : "#92400e", textAlign: "center" }}>
-                    Combined ownership: {total}% {ok ? "\u2713" : "(must equal 100%)"}
+                    Combined ownership: {total}% {ok ? "\u2713" : `(must be at least ${OWNERSHIP_THRESHOLD}%)`}
                   </div>
                 );
               })()}
