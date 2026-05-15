@@ -173,13 +173,23 @@ export function Select({ label, value, onChange, options, required, half, placeh
   );
 }
 
-export function Textarea({ label, value, onChange, placeholder, required, error, id }) {
+export function Textarea({ label, value, onChange, placeholder, required, error, id, maxLength }) {
   const [f, setF] = useState(false);
   const hasErr = error && required && !value;
+  // Live character counter for fields with a maxLength. The DocuSeal PDF template has
+  // a fixed-height description field, and overflow text bleeds into adjacent rows on
+  // the signed document. Showing a counter (and enforcing maxLength) keeps applicants
+  // inside the field's renderable area.
+  const showCounter = typeof maxLength === "number";
+  const len = (value || "").length;
+  // Counter color shifts amber at 90% and red at 100% so the limit is visible before
+  // it's hit, not just after.
+  const counterColor = !showCounter ? "#94a3b8" : len >= maxLength ? "#dc2626" : len >= maxLength * 0.9 ? "#d97706" : "#94a3b8";
   return (
     <div data-error={hasErr ? "true" : undefined} data-field-id={id} style={{ flex: "1 1 100%" }}>
       <label style={{ display: "block", marginBottom: 4, fontSize: 12, fontWeight: 600, color: hasErr ? "#dc2626" : f ? NV3 : "#4a5568", fontFamily: "'Plus Jakarta Sans',sans-serif" }}>{label}{required && <span style={{ color: "#d64545", marginLeft: 2 }}>*</span>}</label>
-      <textarea value={value} placeholder={placeholder} rows={3} onChange={e => onChange(e.target.value)} onFocus={() => setF(true)} onBlur={() => setF(false)} style={{ width: "100%", padding: "10px 12px", border: `1.5px solid ${hasErr ? "#dc2626" : f ? NV3 : "#dde1e7"}`, borderRadius: 10, fontSize: 14, fontFamily: "'Plus Jakarta Sans',sans-serif", color: "#1a202c", background: hasErr ? "#fef2f2" : f ? "#f0f4f8" : "#fff", outline: "none", resize: "vertical", boxSizing: "border-box" }} />
+      <textarea value={value} placeholder={placeholder} rows={3} maxLength={maxLength} onChange={e => onChange(e.target.value)} onFocus={() => setF(true)} onBlur={() => setF(false)} style={{ width: "100%", padding: "10px 12px", border: `1.5px solid ${hasErr ? "#dc2626" : f ? NV3 : "#dde1e7"}`, borderRadius: 10, fontSize: 14, fontFamily: "'Plus Jakarta Sans',sans-serif", color: "#1a202c", background: hasErr ? "#fef2f2" : f ? "#f0f4f8" : "#fff", outline: "none", resize: "vertical", boxSizing: "border-box" }} />
+      {showCounter && <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 4, fontSize: 11, color: counterColor, fontWeight: 500 }}>{len}/{maxLength}</div>}
     </div>
   );
 }
